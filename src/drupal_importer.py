@@ -73,6 +73,24 @@ FIELD_MAP = {
     "it technical contact":               "field_it_technical_contact",
 }
 
+# Fields that are Drupal list/select type — values must match allowed keys exactly.
+# Case-insensitive matching is attempted; unrecognized values are dropped with a warning.
+FIELD_ALLOWED_VALUES: dict[str, set[str]] = {
+    "field_ai_application":             {"Yes", "No"},
+    "field_business_criticality_level": {"High", "Medium", "Low"},
+    "field_confidence":                 {"High", "Medium", "Low"},
+    "field_contains_phi":               {"Yes", "No"},
+    "field_division":                   {"SBUH", "SBSH", "SBELIH", "CPMP", "SBAS", "HSC", "MHL", "SDM"},
+    "field_mission_critical":           {"Yes", "No"},
+    "field_priority_for_business_cont": {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+}
+
+# List fields whose keys are integers in the JSON payload (Drupal list_integer type)
+FIELD_INTEGER_FIELDS: set[str] = {"field_priority_for_business_cont"}
+
+# Fields that must be sent as YYYY-MM-DD strings
+DATE_FIELDS: set[str] = {"field_certificate_expiration_dat"}
+
 # How many times to retry a failed POST before giving up
 MAX_RETRIES = 3
 RETRY_DELAY_SECONDS = 5
@@ -307,6 +325,54 @@ def load_and_merge(filepath: Path) -> list[dict]:
 # Drupal interaction
 # ---------------------------------------------------------------------------
 
+def normalize_list_value(field: str, raw: str) -> str | int | None:
+    """
+    Match a raw spreadsheet value to the exact key Drupal expects for a list field.
+    Returns an int for fields in FIELD_INTEGER_FIELDS, otherwise a str.
+    Returns None if the value cannot be matched to any allowed key.
+    """
+    allowed = FIELD_ALLOWED_VALUES.get(field)
+    if allowed is None:
+        return raw  # not a constrained field — pass through as-is
+
+    is_int_field = field in FIELD_INTEGER_FIELDS
+
+    # For integer fields, coerce raw to int for comparison (handles "5", "5.0")
+    if is_int_field:
+        try:
+            raw_int = int(float(raw))
+            if raw_int in allowed:
+                return raw_int
+        except (ValueError, TypeError):
+            pass
+        return None
+
+    # String fields: exact match, then case-insensitive
+    if raw in allowed:
+        return raw
+    raw_lower = raw.lower()
+    for allowed_val in allowed:
+        if str(allowed_val).lower() == raw_lower:
+            return allowed_val
+
+    return None
+
+
+def normalize_date_value(raw: str) -> str | None:
+    """
+    Coerce a date value to YYYY-MM-DD.
+    openpyxl may return datetime strings like '2024-01-15 00:00:00'.
+    Returns None if the value cannot be recognized as a date.
+    """
+    if not raw:
+        return None
+    # Strip time portion if present
+    date_part = raw.split(" ")[0].split("T")[0]
+    if len(date_part) == 10 and date_part[4] == "-" and date_part[7] == "-":
+        return date_part
+    return None
+
+
 def build_payload(record: dict, content_type: str) -> dict:
     """Transform a merged record into a Drupal JSON:API POST payload."""
     vendor = record.get("field_vendor_name", "")
@@ -316,7 +382,27 @@ def build_payload(record: dict, content_type: str) -> dict:
     for field, value in record.items():
         if field == "field_sites_used":
             attributes[field] = sorted(value)
-        elif value:
+        elif not value:
+            continue
+        elif field in DATE_FIELDS:
+            normalized = normalize_date_value(str(value))
+            if normalized:
+                attributes[field] = normalized
+            else:
+                logger.warning(
+                    "'%s — %s': unrecognized date value for %s: %r — skipping field",
+                    vendor, product, field, value,
+                )
+        elif field in FIELD_ALLOWED_VALUES:
+            normalized = normalize_list_value(field, str(value))
+            if normalized:
+                attributes[field] = normalized
+            else:
+                logger.warning(
+                    "'%s — %s': unrecognized value for %s: %r — skipping field",
+                    vendor, product, field, value,
+                )
+        else:
             attributes[field] = value
 
     return {
