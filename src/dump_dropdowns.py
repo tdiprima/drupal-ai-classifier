@@ -2,7 +2,7 @@
 """
 dump_dropdowns.py
 
-Prints the contents of the Dropdowns sheet from the spreadsheet
+Prints the contents of reference/metadata sheets from the spreadsheet
 so you can see the allowed values for each list field.
 
 Usage:
@@ -16,6 +16,15 @@ from pathlib import Path
 import openpyxl
 
 DEFAULT_SPREADSHEET = Path.home() / "Documents" / "misc" / "software_inventory.xlsx"
+REFERENCE_SHEETS = {"Dropdowns", "Priority Level Definitions"}
+
+
+def dump_sheet(ws) -> None:
+    print(f"  Dimensions: {ws.dimensions}")
+    rows = [row for row in ws.iter_rows(values_only=True) if any(c is not None for c in row)]
+    for row_idx, row in enumerate(rows, 1):
+        cells = "\t".join("" if cell is None else str(cell) for cell in row)
+        print(f"  row {row_idx}:\t{cells}")
 
 
 def main() -> None:
@@ -27,16 +36,13 @@ def main() -> None:
 
     wb = openpyxl.load_workbook(filepath, data_only=True)
 
-    if "Dropdowns" not in wb.sheetnames:
-        print("No 'Dropdowns' sheet found. Available sheets:")
-        for name in wb.sheetnames:
-            print(f"  {name}")
-        sys.exit(0)
-
-    ws = wb["Dropdowns"]
-    for row in ws.iter_rows(values_only=True):
-        if any(cell is not None for cell in row):
-            print("\t".join("" if cell is None else str(cell) for cell in row))
+    for sheet_name in REFERENCE_SHEETS:
+        if sheet_name not in wb.sheetnames:
+            print(f"[{sheet_name}] — not found\n")
+            continue
+        print(f"[{sheet_name}]")
+        dump_sheet(wb[sheet_name])
+        print()
 
 
 if __name__ == "__main__":
