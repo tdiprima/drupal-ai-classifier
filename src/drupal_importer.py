@@ -77,12 +77,13 @@ FIELD_MAP = {
 # Case-insensitive matching is attempted; unrecognized values are dropped with a warning.
 FIELD_ALLOWED_VALUES: dict[str, set[str]] = {
     "field_ai_application":             {"Yes", "No"},
-    "field_business_criticality_level": {"High", "Medium", "Low"},
+    "field_business_criticality_level": {"Mission Critical", "Business Essential", "Business Core", "Business Supporting"},
     "field_confidence":                 {"High", "Medium", "Low"},
     "field_contains_phi":               {"Yes", "No"},
     "field_division":                   {"SBUH", "SBSH", "SBELIH", "CPMP", "SBAS", "HSC", "MHL", "SDM"},
     "field_mission_critical":           {"Yes", "No"},
     "field_priority_for_business_cont": {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+    "field_status":                     {"Restricted", "Protected", "Confidential", "Public"},
 }
 
 # List fields whose keys are integers in the JSON payload (Drupal list_integer type)
