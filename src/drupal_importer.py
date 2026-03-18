@@ -25,6 +25,7 @@ Required .env variables:
     DRUPAL_CONTENT_TYPE   machine name of the content type
 """
 
+import difflib
 import json
 import logging
 import os
@@ -356,6 +357,14 @@ def normalize_list_value(field: str, raw: str) -> str | int | None:
     for allowed_val in allowed:
         if str(allowed_val).lower() == raw_lower:
             return allowed_val
+
+    # Fuzzy match — catches typos like "Critcal" → "critical"
+    candidates = [str(v) for v in allowed]
+    close = difflib.get_close_matches(raw_lower, [c.lower() for c in candidates], n=1, cutoff=0.8)
+    if close:
+        matched = next(c for c in candidates if c.lower() == close[0])
+        logger.warning("Fuzzy-matched %r → %r for %s", raw, matched, field)
+        return matched
 
     return None
 
