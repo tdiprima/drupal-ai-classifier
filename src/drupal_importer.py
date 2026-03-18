@@ -77,13 +77,15 @@ FIELD_MAP = {
 # Case-insensitive matching is attempted; unrecognized values are dropped with a warning.
 FIELD_ALLOWED_VALUES: dict[str, set[str]] = {
     "field_ai_application":             {"Yes", "No"},
-    "field_business_criticality_level": {"Mission Critical", "Business Essential", "Business Core", "Business Supporting"},
+    # Values observed from both the Dropdowns sheet and the Priority Level Definitions sheet
+    "field_business_criticality_level": {
+        "Mission Critical", "Business Essential", "Business Core", "Business Supporting",
+        "Core Infrastructure", "Critical", "High", "Medium", "Low",
+    },
     "field_confidence":                 {"High", "Medium", "Low"},
     "field_contains_phi":               {"Yes", "No"},
-    "field_division":                   {"SBUH", "SBSH", "SBELIH", "CPMP", "SBAS", "HSC", "MHL", "SDM"},
     "field_mission_critical":           {"Yes", "No"},
     "field_priority_for_business_cont": {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
-    "field_status":                     {"Restricted", "Protected", "Confidential", "Public"},
 }
 
 # List fields whose keys are integers in the JSON payload (Drupal list_integer type)
@@ -382,7 +384,8 @@ def build_payload(record: dict, content_type: str) -> dict:
     attributes = {"title": f"{vendor} — {product}"}
     for field, value in record.items():
         if field == "field_sites_used":
-            attributes[field] = sorted(value)
+            # Drupal multi-value list fields require [{"value": "X"}, ...] format
+            attributes[field] = [{"value": site} for site in sorted(value)]
         elif not value:
             continue
         elif field in DATE_FIELDS:
