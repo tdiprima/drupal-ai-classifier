@@ -327,6 +327,29 @@ def build_payload(record: dict, content_type: str) -> dict:
     }
 
 
+def extract_invalid_fields(error_body: str) -> list[str]:
+    """
+    Parse a Drupal JSON:API 422 response and return field names whose values
+    were rejected as invalid choices (e.g. list/select fields with bad keys).
+    Returns an empty list if the body cannot be parsed or no such errors exist.
+    """
+    try:
+        data = json.loads(error_body)
+    except (json.JSONDecodeError, ValueError):
+        return []
+
+    invalid_fields = []
+    for error in data.get("errors", []):
+        detail = error.get("detail", "")
+        pointer = error.get("source", {}).get("pointer", "")
+        if "not a valid choice" in detail and pointer:
+            # pointer looks like /data/attributes/field_foo/0
+            parts = pointer.strip("/").split("/")
+            if len(parts) >= 3 and parts[0] == "data" and parts[1] == "attributes":
+                invalid_fields.append(parts[2])
+    return invalid_fields
+
+
 def post_node_with_retry(
     session: requests.Session,
     base_url: str,
@@ -336,7 +359,8 @@ def post_node_with_retry(
     """
     POST a single node to Drupal, retrying on transient connection errors.
     Returns True on success, False if all attempts fail.
-    4xx errors are not retried — they indicate a data or config problem.
+    On a 422 caused by invalid list-field values, strips those fields and
+    retries once — so one bad field value does not discard the whole record.
     """
     url = f"{base_url}/jsonapi/node/{content_type}"
     title = payload["data"]["attributes"].get("title", "?")
@@ -349,9 +373,24 @@ def post_node_with_retry(
 
         except requests.exceptions.HTTPError as exc:
             status = exc.response.status_code
-            body = exc.response.text[:400]
+            body = exc.response.text[:800]
+            if status == 422:
+                invalid = extract_invalid_fields(exc.response.text)
+                if invalid:
+                    logger.warning(
+                        "HTTP 422 posting '%s' — dropping invalid field(s) and retrying: %s",
+                        title, invalid,
+                    )
+                    for field in invalid:
+                        payload["data"]["attributes"].pop(field, None)
+                    continue  # retry immediately with cleaned payload
+                # 422 with no parseable invalid fields — give up
+                logger.error(
+                    "HTTP 422 posting '%s' (not retrying): %s", title, body
+                )
+                return False
             if 400 <= status < 500:
-                # Client error — retrying won't help
+                # Other client error — retrying won't help
                 logger.error(
                     "HTTP %s posting '%s' (not retrying): %s", status, title, body
                 )
