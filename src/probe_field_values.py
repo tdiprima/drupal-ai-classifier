@@ -2,14 +2,11 @@
 """
 probe_field_values.py
 
-POSTs a minimal test node with a sentinel value for one field at a time.
-Drupal's 422 error often lists the accepted values, telling us the real keys.
-
-The test node title starts with 'PROBE_DELETE_' so it's easy to find and
-delete from the Drupal admin UI after you're done.
+Tries candidate values for each list field until one is accepted by Drupal.
+Any nodes that get created (HTTP 201) are immediately deleted.
 
 Usage:
-    python probe_field_values.py                        # probes all list fields
+    python probe_field_values.py
     python probe_field_values.py field_business_criticality_level
 """
 
@@ -23,57 +20,119 @@ from dotenv import load_dotenv
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-PROBE_FIELDS = [
-    "field_business_criticality_level",
-    "field_contains_phi",
-    "field_mission_critical",
-    "field_status",
-    "field_division",
-    "field_sites_used",
-    "field_ai_application",
-    "field_confidence",
-]
+CANDIDATES: dict[str, list] = {
+    "field_business_criticality_level": [
+        "Mission Critical", "mission_critical", "mission critical",
+        "Business Essential", "business_essential", "business essential",
+        "Business Core", "business_core", "business core",
+        "Business Supporting", "business_supporting", "business supporting",
+        "Core Infrastructure", "core_infrastructure",
+        "Critical", "critical",
+        "High", "high",
+        "Medium", "medium",
+        "Low", "low",
+    ],
+    "field_contains_phi": [
+        "Yes", "No", "yes", "no", "YES", "NO", "1", "0", "true", "false",
+    ],
+    "field_mission_critical": [
+        "Yes", "No", "yes", "no", "YES", "NO", "1", "0", "true", "false",
+    ],
+    "field_ai_application": [
+        "Yes", "No", "yes", "no", "YES", "NO", "1", "0", "true", "false",
+    ],
+    "field_confidence": [
+        "High", "Medium", "Low", "high", "medium", "low",
+        "HIGH", "MEDIUM", "LOW",
+    ],
+    "field_status": [
+        "Active", "active", "ACTIVE",
+        "Inactive", "inactive", "INACTIVE",
+        "Restricted", "restricted", "RESTRICTED",
+        "Protected", "protected", "PROTECTED",
+        "Confidential", "confidential", "CONFIDENTIAL",
+        "Public", "public", "PUBLIC",
+        "Retired", "retired", "RETIRED",
+        "1", "0",
+    ],
+    "field_division": [
+        "SBUH", "SBSH", "SBELIH", "CPMP", "SBAS", "HSC", "MHL", "SDM",
+        "sbuh", "sbsh", "sbelih", "cpmp", "sbas", "hsc", "mhl", "sdm",
+    ],
+    "field_sites_used": [
+        "SBUH", "SBSH", "SBELIH", "CPMP", "SBAS", "HSC", "MHL", "SDM",
+        "sbuh", "sbsh", "sbelih", "cpmp", "sbas", "hsc", "mhl", "sdm",
+    ],
+}
 
-SENTINEL = "__PROBE__"
+# Use a unique suffix so probe nodes are easy to find and delete
+PROBE_TITLE_PREFIX = "PROBE_DELETE_ME"
 
 
-def probe_field(session, base_url: str, content_type: str, field_name: str) -> None:
-    """POST a node with a sentinel value for field_name and print the full error."""
+def field_value_is_rejected(errors: list, field_name: str) -> bool:
+    """Return True if the field itself was rejected (not a valid choice)."""
+    for err in errors:
+        pointer = err.get("source", {}).get("pointer", "")
+        detail = err.get("detail", "")
+        if field_name in pointer and "not a valid choice" in detail:
+            return True
+    return False
+
+
+def delete_node(session, base_url: str, node_id: str) -> None:
+    url = f"{base_url}/jsonapi/node/{node_id}"
+    session.delete(url, timeout=10)
+
+
+def probe_field(
+    session,
+    base_url: str,
+    content_type: str,
+    field_name: str,
+    candidates: list,
+) -> None:
     url = f"{base_url}/jsonapi/node/{content_type}"
+    valid_keys = []
 
-    if field_name == "field_sites_used":
-        value = [{"value": SENTINEL}]
-    else:
-        value = SENTINEL
+    for candidate in candidates:
+        value = [{"value": candidate}] if field_name == "field_sites_used" else candidate
 
-    payload = {
-        "data": {
-            "type": f"node--{content_type}",
-            "attributes": {
-                "title": f"PROBE_DELETE_{field_name}",
-                field_name: value,
-            },
+        payload = {
+            "data": {
+                "type": f"node--{content_type}",
+                "attributes": {
+                    "title": f"{PROBE_TITLE_PREFIX}_{field_name}",
+                    "field_vendor_name": "PROBE_VENDOR",
+                    "field_product_name": "PROBE_PRODUCT",
+                    "field_description": "PROBE_DESCRIPTION",
+                    field_name: value,
+                },
+            }
         }
-    }
 
-    response = session.post(url, json=payload, timeout=15)
+        response = session.post(url, json=payload, timeout=15)
 
-    print(f"\n{'=' * 60}")
-    print(f"Field: {field_name}  →  HTTP {response.status_code}")
+        if response.status_code == 201:
+            valid_keys.append(candidate)
+            node_id = response.json().get("data", {}).get("id")
+            if node_id:
+                delete_node(session, base_url, node_id)
+            continue
 
-    if response.status_code == 201:
-        node_id = response.json().get("data", {}).get("id", "?")
-        print(f"  WARNING: probe node was CREATED (id={node_id}) — delete it from Drupal admin")
-        return
+        if response.status_code == 422:
+            try:
+                errors = response.json().get("errors", [])
+            except (json.JSONDecodeError, ValueError):
+                continue
+            # If the field itself is not in the errors, the value was accepted
+            if not field_value_is_rejected(errors, field_name):
+                valid_keys.append(candidate)
 
-    try:
-        body = response.json()
-        errors = body.get("errors", [])
-        for err in errors:
-            print(f"  detail : {err.get('detail', '')}")
-            print(f"  pointer: {err.get('source', {}).get('pointer', '')}")
-    except (json.JSONDecodeError, ValueError):
-        print(f"  raw response: {response.text[:600]}")
+    print(f"\n  {field_name}:")
+    if valid_keys:
+        print(f"    VALID keys: {valid_keys}")
+    else:
+        print(f"    No valid keys found from candidates list")
 
 
 def main() -> None:
@@ -87,7 +146,11 @@ def main() -> None:
         print("ERROR: missing required .env variables", file=sys.stderr)
         sys.exit(1)
 
-    fields = sys.argv[1:] if len(sys.argv) > 1 else PROBE_FIELDS
+    fields = sys.argv[1:] if len(sys.argv) > 1 else list(CANDIDATES.keys())
+    unknown = [f for f in fields if f not in CANDIDATES]
+    if unknown:
+        print(f"ERROR: no candidates defined for: {unknown}", file=sys.stderr)
+        sys.exit(1)
 
     session = requests.Session()
     session.auth = (username, password)
@@ -97,13 +160,13 @@ def main() -> None:
     })
     session.verify = False
 
-    print(f"Probing {len(fields)} field(s) on node/{content_type}...")
+    print(f"Probing {len(fields)} field(s) on node/{content_type}...\n")
+    print("(Any probe nodes created will be auto-deleted)\n")
     for field_name in fields:
-        probe_field(session, base_url, content_type, field_name)
+        probe_field(session, base_url, content_type, field_name, CANDIDATES[field_name])
 
-    print(f"\n{'=' * 60}")
-    print("Done. If any probe nodes were created, delete them from:")
-    print(f"  {base_url}/admin/content?title=PROBE_DELETE")
+    print(f"\nDone. Verify no leftover probe nodes at:")
+    print(f"  {base_url}/admin/content?title={PROBE_TITLE_PREFIX}")
 
 
 if __name__ == "__main__":
