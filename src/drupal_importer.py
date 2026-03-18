@@ -254,7 +254,16 @@ def load_and_merge(filepath: Path) -> list[dict]:
 
             vendor = clean(row[vendor_col])
             product = clean(row[product_col])
-            if not vendor or not product:
+
+            desc_col = field_col_indices.get("field_description")
+            description = clean(row[desc_col]) if (desc_col is not None and desc_col < len(row)) else ""
+
+            if not vendor or not product or not description:
+                missing = [f for f, v in [("vendor", vendor), ("product", product), ("description", description)] if not v]
+                logger.warning(
+                    "Sheet '%s': skipping row — missing required field(s): %s",
+                    sheet_name, ", ".join(missing),
+                )
                 continue
 
             key = (vendor.lower(), product.lower())
