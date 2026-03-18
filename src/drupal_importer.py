@@ -76,16 +76,15 @@ FIELD_MAP = {
 # Fields that are Drupal list/select type — values must match allowed keys exactly.
 # Case-insensitive matching is attempted; unrecognized values are dropped with a warning.
 FIELD_ALLOWED_VALUES: dict[str, set[str]] = {
-    "field_ai_application":             {"Yes", "No"},
-    # Values observed from both the Dropdowns sheet and the Priority Level Definitions sheet
-    "field_business_criticality_level": {
-        "Mission Critical", "Business Essential", "Business Core", "Business Supporting",
-        "Core Infrastructure", "Critical", "High", "Medium", "Low",
-    },
-    "field_confidence":                 {"High", "Medium", "Low"},
-    "field_contains_phi":               {"Yes", "No"},
-    "field_mission_critical":           {"Yes", "No"},
+    "field_ai_application":             {"yes", "no"},
+    "field_business_criticality_level": {"critical", "high", "medium", "low"},
+    "field_confidence":                 {"high", "medium", "low"},
+    "field_contains_phi":               {"yes", "no"},
+    "field_division":                   {"sbuh", "sbsh", "sbelih", "cpmp", "sbas", "hsc", "mhl", "sdm"},
+    "field_mission_critical":           {"yes", "no"},
     "field_priority_for_business_cont": {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+    "field_sites_used":                 {"sbuh", "sbsh", "sbelih", "cpmp", "sbas", "hsc", "mhl", "sdm"},
+    "field_status":                     {"active", "inactive"},
 }
 
 # List fields whose keys are integers in the JSON payload (Drupal list_integer type)
@@ -384,8 +383,16 @@ def build_payload(record: dict, content_type: str) -> dict:
     attributes = {"title": f"{vendor} — {product}"}
     for field, value in record.items():
         if field == "field_sites_used":
-            # Drupal multi-value list fields require [{"value": "X"}, ...] format
-            attributes[field] = [{"value": site} for site in sorted(value)]
+            # Multi-value list field — lowercase keys, object format required by JSON:API
+            allowed = FIELD_ALLOWED_VALUES["field_sites_used"]
+            valid_sites = [s.lower() for s in sorted(value) if s.lower() in allowed]
+            invalid_sites = [s for s in value if s.lower() not in allowed]
+            if invalid_sites:
+                logger.warning(
+                    "'%s — %s': unrecognized site(s) for field_sites_used: %s — skipping",
+                    vendor, product, invalid_sites,
+                )
+            attributes[field] = [{"value": site} for site in valid_sites]
         elif not value:
             continue
         elif field in DATE_FIELDS:
