@@ -14,5 +14,5 @@ wheels/
 .ruff_cache/
 */.claude/
 
-audit_report.csv
-import_progress.json
+*.csv
+*.json
