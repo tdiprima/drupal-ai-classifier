@@ -24,21 +24,33 @@ Required .env variables (same as drupal_importer.py):
 """
 
 import csv
-import difflib
-import json
 import logging
 import os
 import sys
 import time
 import urllib3
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import openpyxl
 import requests
 from dotenv import load_dotenv
+
+# Reuse constants and normalization functions from the importer
+sys.path.insert(0, str(Path(__file__).parent))
+from drupal_importer import (
+    clean,
+    normalize_list_value,
+    normalize_date_value,
+    SKIP_SHEETS,
+    SITE_COLUMNS,
+    FIELD_MAP,
+    FIELD_ALLOWED_VALUES,
+    FIELD_INTEGER_FIELDS,
+    DATE_FIELDS,
+    DEFAULT_SPREADSHEET,
+)
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -51,50 +63,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Constants — mirrored exactly from drupal_importer.py so the audit applies
-# the same rules the importer used.
-# ---------------------------------------------------------------------------
-
-SKIP_SHEETS = {"MASTER Spreadsheet", "Priority Level Definitions", "Dropdowns", "Sheet1"}
-SITE_COLUMNS = ["SBUH", "SBSH", "SBELIH", "CPMP", "SBAS", "HSC", "MHL", "SDM"]
-
-# Excel column label (lowercase) → Drupal field machine name
-FIELD_MAP = {
-    "division":                           "field_division",
-    "vendor name":                        "field_vendor_name",
-    "status":                             "field_status",
-    "product name":                       "field_product_name",
-    "contains phi (yes/no)":              "field_contains_phi",
-    "mission critical (yes/no)":          "field_mission_critical",
-    "priority for business continuity":   "field_priority_for_business_cont",
-    "business criticality level":         "field_business_criticality_level",
-    "description":                        "field_description",
-    "contract terms":                     "field_contract_terms",
-    "certificate expiration date":        "field_certificate_expiration_dat",
-    "responisible dept/category":         "field_responsible_dept_category",
-    "business sponsor name/phone number": "field_business_sponsor_name_phon",
-    "it director/ manager":               "field_it_director_manager",
-    "it technical contact":               "field_it_technical_contact",
-}
-
 # Reverse map for human-readable reporting
 FIELD_MAP_REVERSE: dict[str, str] = {v: k for k, v in FIELD_MAP.items()}
-
-FIELD_ALLOWED_VALUES: dict[str, set] = {
-    "field_ai_application":             {"yes", "no"},
-    "field_business_criticality_level": {"critical", "high", "medium", "low"},
-    "field_confidence":                 {"high", "medium", "low"},
-    "field_contains_phi":               {"yes", "no"},
-    "field_division":                   {"sbuh", "sbsh", "sbelih", "cpmp", "sbas", "hsc", "mhl", "sdm"},
-    "field_mission_critical":           {"yes", "no"},
-    "field_priority_for_business_cont": {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
-    "field_sites_used":                 {"sbuh", "sbsh", "sbelih", "cpmp", "sbas", "hsc", "mhl", "sdm"},
-    "field_status":                     {"active", "inactive"},
-}
-
-FIELD_INTEGER_FIELDS: set[str] = {"field_priority_for_business_cont"}
-DATE_FIELDS: set[str] = {"field_certificate_expiration_dat"}
 
 # Every Drupal field we expect the importer to have populated from Excel
 ALL_AUDITABLE_FIELDS: list[str] = list(FIELD_MAP.values()) + ["field_sites_used"]
@@ -102,7 +72,6 @@ ALL_AUDITABLE_FIELDS: list[str] = list(FIELD_MAP.values()) + ["field_sites_used"
 # Polite delay between Drupal API calls (seconds)
 DRUPAL_FETCH_DELAY = 0.2
 
-DEFAULT_SPREADSHEET = Path.home() / "Documents" / "misc" / "software_inventory.xlsx"
 DEFAULT_OUTPUT = Path("audit_report.csv")
 
 # ---------------------------------------------------------------------------
@@ -209,73 +178,6 @@ def load_config() -> dict:
         "password": os.environ["DRUPAL_PASSWORD"],
         "content_type": os.environ["DRUPAL_CONTENT_TYPE"],
     }
-
-
-# ---------------------------------------------------------------------------
-# Value normalization — mirrors drupal_importer.py exactly
-# ---------------------------------------------------------------------------
-
-def clean(value: Any) -> str:
-    """Normalize a cell value to a stripped string; empty string for blank or nan."""
-    text = str(value or "").strip()
-    return "" if text.lower() == "nan" else text
-
-
-def normalize_list_value(drupal_field: str, raw: str) -> str | int | None:
-    """
-    Match a raw Excel value to the exact key Drupal expects for a list field.
-    Mirrors drupal_importer.py normalize_list_value() exactly so the audit
-    can reproduce the same pass/fail decision the importer made.
-    Returns None when no valid match is found (the importer would have dropped it).
-    """
-    allowed = FIELD_ALLOWED_VALUES.get(drupal_field)
-    if allowed is None:
-        # Not a constrained field — pass through unchanged
-        return raw
-
-    is_int_field = drupal_field in FIELD_INTEGER_FIELDS
-    if is_int_field:
-        try:
-            raw_int = int(float(raw))
-            if raw_int in allowed:
-                return raw_int
-        except (ValueError, TypeError):
-            pass
-        return None
-
-    # Exact match
-    if raw in allowed:
-        return raw
-
-    # Case-insensitive match
-    raw_lower = raw.lower()
-    for allowed_val in allowed:
-        if str(allowed_val).lower() == raw_lower:
-            return allowed_val
-
-    # Fuzzy match (catches typos like "Critcal" → "critical")
-    candidates = [str(v) for v in allowed]
-    close = difflib.get_close_matches(raw_lower, [c.lower() for c in candidates], n=1, cutoff=0.8)
-    if close:
-        matched = next(c for c in candidates if c.lower() == close[0])
-        logger.debug("Fuzzy-matched %r → %r for %s", raw, matched, drupal_field)
-        return matched
-
-    return None
-
-
-def normalize_date_value(raw: str) -> str | None:
-    """
-    Coerce a date value to YYYY-MM-DD.
-    openpyxl may return datetime strings like '2024-01-15 00:00:00'.
-    Returns None if the value cannot be parsed as a date.
-    """
-    if not raw:
-        return None
-    date_part = raw.split(" ")[0].split("T")[0]
-    if len(date_part) == 10 and date_part[4] == "-" and date_part[7] == "-":
-        return date_part
-    return None
 
 
 def apply_importer_transform(drupal_field: str, raw_value: str) -> tuple[str | int | None, str | None]:
