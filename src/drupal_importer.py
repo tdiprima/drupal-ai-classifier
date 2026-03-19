@@ -53,7 +53,7 @@ DEFAULT_PROGRESS_FILE = Path(__file__).parent.parent / "import_progress.json"
 SKIP_SHEETS = {"MASTER Spreadsheet", "Priority Level Definitions", "Dropdowns", "Sheet1"}
 
 # The 8 site columns in the spreadsheet (cell value "X" = used at that site)
-SITE_COLUMNS = ["SBUH", "SBSH", "SBELIH", "CPMP", "SBAS", "HSC", "MHL", "SDM"]
+SITE_COLUMNS = ["SBUH", "SBSH", "SBELIH", "CPMP", "SBAS", "HSC", "MHL", "SDM", "SHH", "SOM"]
 
 # Spreadsheet column label (lowercase) → Drupal field machine name
 FIELD_MAP = {
@@ -81,10 +81,10 @@ FIELD_ALLOWED_VALUES: dict[str, set[str]] = {
     "field_business_criticality_level": {"critical", "high", "medium", "low"},
     "field_confidence":                 {"high", "medium", "low"},
     "field_contains_phi":               {"yes", "no"},
-    "field_division":                   {"sbuh", "sbsh", "sbelih", "cpmp", "sbas", "hsc", "mhl", "sdm"},
+    "field_division":                   {"sbuh", "sbsh", "sbelih", "cpmp", "sbas", "hsc", "mhl", "sdm", "shh", "som"},
     "field_mission_critical":           {"yes", "no"},
     "field_priority_for_business_cont": {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
-    "field_sites_used":                 {"sbuh", "sbsh", "sbelih", "cpmp", "sbas", "hsc", "mhl", "sdm"},
+    "field_sites_used":                 {"sbuh", "sbsh", "sbelih", "cpmp", "sbas", "hsc", "mhl", "sdm", "shh", "som"},
     "field_status":                     {"active", "inactive"},
 }
 
