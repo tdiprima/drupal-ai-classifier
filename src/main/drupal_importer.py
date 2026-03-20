@@ -455,6 +455,28 @@ def extract_invalid_fields(error_body: str) -> list[str]:
     return invalid_fields
 
 
+def fetch_created_node(
+    session: requests.Session,
+    base_url: str,
+    content_type: str,
+    node_id: str,
+) -> dict | None:
+    """
+    Fetch a newly-created node by UUID to verify that the POST actually produced
+    a readable Drupal resource.
+    Returns the JSON:API data object on success, or None on failure.
+    """
+    url = f"{base_url}/jsonapi/node/{content_type}/{node_id}"
+    try:
+        response = session.get(url, timeout=30)
+        response.raise_for_status()
+        payload = response.json()
+        return payload.get("data")
+    except (requests.exceptions.RequestException, ValueError) as exc:
+        logger.error("Failed to verify created node %s: %s", node_id, exc)
+        return None
+
+
 def post_node_with_retry(
     session: requests.Session,
     base_url: str,
@@ -463,7 +485,8 @@ def post_node_with_retry(
 ) -> bool:
     """
     POST a single node to Drupal, retrying on transient connection errors.
-    Returns True on success, False if all attempts fail.
+    Returns True only if Drupal accepts the POST and the created node can be
+    re-fetched successfully. Returns False if all attempts fail.
     On a 422 caused by invalid list-field values, strips those fields and
     retries once — so one bad field value does not discard the whole record.
     """
@@ -474,6 +497,46 @@ def post_node_with_retry(
         try:
             response = session.post(url, json=payload, timeout=30)
             response.raise_for_status()
+
+            try:
+                response_data = response.json().get("data", {})
+            except ValueError:
+                logger.error("POST succeeded for '%s' but Drupal returned non-JSON response", title)
+                return False
+
+            node_id = response_data.get("id", "")
+            if not node_id:
+                logger.error("POST succeeded for '%s' but response did not include a node UUID", title)
+                return False
+
+            created_node = fetch_created_node(session, base_url, content_type, node_id)
+            if not created_node:
+                logger.error(
+                    "POST succeeded for '%s' but verification fetch failed for node %s",
+                    title, node_id,
+                )
+                return False
+
+            attrs = created_node.get("attributes", {})
+            published = attrs.get("status")
+            moderation_state = attrs.get("moderation_state")
+            visibility_bits = []
+            if published is not None:
+                visibility_bits.append(f"published={published}")
+            if moderation_state:
+                visibility_bits.append(f"moderation_state={moderation_state}")
+            visibility_suffix = f" ({', '.join(visibility_bits)})" if visibility_bits else ""
+
+            if published is False:
+                logger.warning(
+                    "Verified node '%s' created as %s%s",
+                    title, node_id, visibility_suffix,
+                )
+            else:
+                logger.info(
+                    "Verified node '%s' created as %s%s",
+                    title, node_id, visibility_suffix,
+                )
             return True
 
         except requests.exceptions.HTTPError as exc:
