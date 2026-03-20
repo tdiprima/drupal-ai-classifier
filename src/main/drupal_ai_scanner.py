@@ -43,10 +43,10 @@ from pathlib import Path
 
 import requests
 import urllib3
-from dotenv import load_dotenv
 from openai import AzureOpenAI
 
 from ai_scanner_core import check_for_ai, configure_logging
+from drupal_importer import load_config as load_drupal_config
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -96,32 +96,21 @@ def parse_args() -> dict:
 # ---------------------------------------------------------------------------
 
 def load_config() -> dict:
-    """Load and validate all required environment variables from .env."""
-    load_dotenv()
+    """Load Drupal config and validate Azure OpenAI environment variables."""
+    config = load_drupal_config()
 
-    required = [
-        "DRUPAL_BASE_URL",
-        "DRUPAL_USERNAME",
-        "DRUPAL_PASSWORD",
-        "DRUPAL_CONTENT_TYPE",
-        "AZURE_OPENAI_ENDPOINT",
-        "AZURE_OPENAI_API_KEY",
-        "AZURE_OPENAI_DEPLOYMENT",
-    ]
-    missing = [k for k in required if not os.environ.get(k)]
+    azure_required = ["AZURE_OPENAI_ENDPOINT", "AZURE_OPENAI_API_KEY", "AZURE_OPENAI_DEPLOYMENT"]
+    missing = [k for k in azure_required if not os.environ.get(k)]
     if missing:
         logger.error("Missing required environment variables: %s", ", ".join(missing))
         sys.exit(1)
 
-    return {
-        "base_url": os.environ["DRUPAL_BASE_URL"].rstrip("/"),
-        "username": os.environ["DRUPAL_USERNAME"],
-        "password": os.environ["DRUPAL_PASSWORD"],
-        "content_type": os.environ["DRUPAL_CONTENT_TYPE"],
+    config.update({
         "azure_endpoint": os.environ["AZURE_OPENAI_ENDPOINT"],
         "azure_api_key": os.environ["AZURE_OPENAI_API_KEY"],
         "azure_deployment": os.environ["AZURE_OPENAI_DEPLOYMENT"],
-    }
+    })
+    return config
 
 
 # ---------------------------------------------------------------------------

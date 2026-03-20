@@ -21,7 +21,6 @@ Required .env variables: same as drupal_importer.py
 
 import csv
 import logging
-import os
 import sys
 import time
 from collections import defaultdict
@@ -29,10 +28,9 @@ from pathlib import Path
 
 import requests
 import urllib3
-from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).parent))
-from drupal_importer import (DATE_FIELDS, FIELD_ALLOWED_VALUES,
+from drupal_importer import (DATE_FIELDS, FIELD_ALLOWED_VALUES, load_config,
                              normalize_date_value, normalize_list_value)
 from drupal_patcher import fetch_all_nodes
 
@@ -71,26 +69,6 @@ def parse_args() -> dict:
             audit_csv = Path(args[idx + 1])
 
     return {"dry_run": dry_run, "audit_csv": audit_csv}
-
-
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
-
-def load_config() -> dict:
-    """Load and validate required environment variables from .env."""
-    load_dotenv()
-    required = ["DRUPAL_BASE_URL", "DRUPAL_USERNAME", "DRUPAL_PASSWORD", "DRUPAL_CONTENT_TYPE"]
-    missing = [k for k in required if not os.environ.get(k)]
-    if missing:
-        logger.error("Missing required environment variables: %s", ", ".join(missing))
-        sys.exit(1)
-    return {
-        "base_url": os.environ["DRUPAL_BASE_URL"].rstrip("/"),
-        "username": os.environ["DRUPAL_USERNAME"],
-        "password": os.environ["DRUPAL_PASSWORD"],
-        "content_type": os.environ["DRUPAL_CONTENT_TYPE"],
-    }
 
 
 # ---------------------------------------------------------------------------

@@ -25,7 +25,6 @@ Required .env variables (same as drupal_importer.py):
 
 import csv
 import logging
-import os
 import sys
 import time
 from dataclasses import dataclass, field
@@ -34,14 +33,13 @@ from pathlib import Path
 import openpyxl
 import requests
 import urllib3
-from dotenv import load_dotenv
 
 # Reuse constants and normalization functions from the importer
 sys.path.insert(0, str(Path(__file__).parent))
 from drupal_importer import (DATE_FIELDS, DEFAULT_SPREADSHEET,
                              FIELD_ALLOWED_VALUES, FIELD_MAP, SITE_COLUMNS,
-                             SKIP_SHEETS, clean, normalize_date_value,
-                             normalize_list_value)
+                             SKIP_SHEETS, clean, load_config,
+                             normalize_date_value, normalize_list_value)
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -148,26 +146,6 @@ def parse_args() -> dict:
         "output": output,
         "limit": limit,
         "debug": debug,
-    }
-
-
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
-
-def load_config() -> dict:
-    """Load and validate required environment variables from .env."""
-    load_dotenv()
-    required = ["DRUPAL_BASE_URL", "DRUPAL_USERNAME", "DRUPAL_PASSWORD", "DRUPAL_CONTENT_TYPE"]
-    missing = [k for k in required if not os.environ.get(k)]
-    if missing:
-        logger.error("Missing required environment variables: %s", ", ".join(missing))
-        sys.exit(1)
-    return {
-        "base_url": os.environ["DRUPAL_BASE_URL"].rstrip("/"),
-        "username": os.environ["DRUPAL_USERNAME"],
-        "password": os.environ["DRUPAL_PASSWORD"],
-        "content_type": os.environ["DRUPAL_CONTENT_TYPE"],
     }
 
 
