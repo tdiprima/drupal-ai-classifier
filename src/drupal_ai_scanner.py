@@ -52,7 +52,6 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 logger = logging.getLogger(__name__)
 
-ENV_FILE = Path(__file__).parent.parent / ".env"
 DEFAULT_PROGRESS_FILE = Path(__file__).parent.parent / "ai_scan_progress.json"
 FIRST_RUN_LIMIT = 10
 PAGE_SIZE = 50
@@ -98,7 +97,7 @@ def parse_args() -> dict:
 
 def load_config() -> dict:
     """Load and validate all required environment variables from .env."""
-    load_dotenv(ENV_FILE)
+    load_dotenv()
 
     required = [
         "DRUPAL_BASE_URL",
