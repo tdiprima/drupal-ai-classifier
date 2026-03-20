@@ -286,7 +286,7 @@ def load_excel_with_audit_data(
             if not vendor or not product or not description:
                 missing = [
                     label
-                    for label, val in [("vendor", vendor), ("product", product), ("description", description)]
+                    for label, val in (("vendor", vendor), ("product", product), ("description", description))
                     if not val
                 ]
                 logger.debug(

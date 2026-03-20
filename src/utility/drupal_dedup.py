@@ -14,6 +14,7 @@ Required .env variables: same as drupal_importer.py
 """
 
 import logging
+import operator
 import os
 import sys
 import time
@@ -149,7 +150,7 @@ def pick_node_to_keep(group: list[dict]) -> tuple[dict, list[dict]]:
         scored.append((filled, node))
 
     # Sort descending by filled count — first one is the keeper
-    scored.sort(key=lambda pair: pair[0], reverse=True)
+    scored.sort(key=operator.itemgetter(0), reverse=True)
 
     keeper = scored[0][1]
     to_delete = [pair[1] for pair in scored[1:]]

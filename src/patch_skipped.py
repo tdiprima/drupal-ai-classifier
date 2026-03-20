@@ -126,7 +126,7 @@ def load_skipped_patches(audit_csv: Path) -> dict[str, dict[str, str]]:
         total_rows,
         len(patches),
     )
-    return dict(patches)
+    return patches.copy()
 
 
 # ---------------------------------------------------------------------------

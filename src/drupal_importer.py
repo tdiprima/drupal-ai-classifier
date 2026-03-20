@@ -31,6 +31,7 @@ import logging
 import os
 import sys
 import time
+from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
 
@@ -280,7 +281,7 @@ def load_and_merge(filepath: Path) -> list[dict]:
             description = clean(row[desc_col]) if (desc_col is not None and desc_col < len(row)) else ""
 
             if not vendor or not product or not description:
-                missing = [f for f, v in [("vendor", vendor), ("product", product), ("description", description)] if not v]
+                missing = [f for f, v in (("vendor", vendor), ("product", product), ("description", description)) if not v]
                 logger.warning(
                     "Sheet '%s': skipping row — missing required field(s): %s",
                     sheet_name, ", ".join(missing),
@@ -342,12 +343,10 @@ def normalize_list_value(field: str, raw: str) -> str | int | None:
 
     # For integer fields, coerce raw to int for comparison (handles "5", "5.0")
     if is_int_field:
-        try:
+        with suppress(ValueError, TypeError):
             raw_int = int(float(raw))
             if raw_int in allowed:
                 return raw_int
-        except (ValueError, TypeError):
-            pass
         return None
 
     # String fields: exact match, then case-insensitive
@@ -355,11 +354,11 @@ def normalize_list_value(field: str, raw: str) -> str | int | None:
         return raw
     raw_lower = raw.lower()
     for allowed_val in allowed:
-        if str(allowed_val).lower() == raw_lower:
+        if allowed_val.lower() == raw_lower:
             return allowed_val
 
     # Fuzzy match — catches typos like "Critcal" → "critical"
-    candidates = [str(v) for v in allowed]
+    candidates = list(allowed)
     close = difflib.get_close_matches(raw_lower, [c.lower() for c in candidates], n=1, cutoff=0.8)
     if close:
         matched = next(c for c in candidates if c.lower() == close[0])
@@ -379,7 +378,7 @@ def normalize_date_value(raw: str) -> str | None:
         return None
     # Strip time portion if present
     date_part = raw.split(" ")[0].split("T")[0]
-    if len(date_part) == 10 and date_part[4] == "-" and date_part[7] == "-":
+    if len(date_part) == 10 and date_part[4] == date_part[7] == "-":
         return date_part
     return None
 
