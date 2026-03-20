@@ -22,20 +22,37 @@ Required .env variables:
     DRUPAL_CONTENT_TYPE   machine name of the content type
 """
 
-import difflib
-import json
 import logging
-import os
 import sys
 import time
-from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
 
 import openpyxl
 import requests
 import urllib3
-from dotenv import load_dotenv
+
+from drupal_importer import (
+    DEFAULT_SPREADSHEET,
+    DATE_FIELDS,
+    FIELD_ALLOWED_VALUES,
+    FIELD_INTEGER_FIELDS,
+    FIELD_MAP,
+    MAX_RETRIES,
+    RETRY_DELAY_SECONDS,
+    SITE_COLUMNS,
+    SKIP_SHEETS,
+    build_payload,
+    clean,
+    extract_invalid_fields,
+    load_config,
+    load_progress,
+    mark_complete,
+    normalize_date_value,
+    normalize_list_value,
+    post_node_with_retry,
+    save_progress,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,47 +61,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-DEFAULT_SPREADSHEET = Path.home() / "Documents" / "misc" / "software_inventory.xlsx"
 DEFAULT_PROGRESS_FILE = Path(__file__).parent.parent / "import_nodesc_progress.json"
-
-SKIP_SHEETS = {"MASTER Spreadsheet", "Priority Level Definitions", "Dropdowns", "Sheet1"}
-SITE_COLUMNS = ["SBUH", "SBSH", "SBELIH", "CPMP", "SBAS", "HSC", "MHL", "SDM", "SHH", "SOM"]
-
-FIELD_MAP = {
-    "division":                           "field_division",
-    "vendor name":                        "field_vendor_name",
-    "status":                             "field_status",
-    "product name":                       "field_product_name",
-    "contains phi (yes/no)":              "field_contains_phi",
-    "mission critical (yes/no)":          "field_mission_critical",
-    "priority for business continuity":   "field_priority_for_business_cont",
-    "business criticality level":         "field_business_criticality_level",
-    "description":                        "field_description",
-    "contract terms":                     "field_contract_terms",
-    "certificate expiration date":        "field_certificate_expiration_dat",
-    "responisible dept/category":         "field_responsible_dept_category",
-    "business sponsor name/phone number": "field_business_sponsor_name_phon",
-    "it director/ manager":               "field_it_director_manager",
-    "it technical contact":               "field_it_technical_contact",
-}
-
-FIELD_ALLOWED_VALUES: dict[str, set] = {
-    "field_ai_application":             {"yes", "no"},
-    "field_business_criticality_level": {"core_infrastructure", "critical", "high", "medium", "low"},
-    "field_confidence":                 {"high", "medium", "low"},
-    "field_contains_phi":               {"yes", "no"},
-    "field_division":                   {"sbuh", "sbsh", "sbelih", "cpmp", "sbas", "hsc", "mhl", "sdm", "shh", "som"},
-    "field_mission_critical":           {"yes", "no"},
-    "field_priority_for_business_cont": {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
-    "field_sites_used":                 {"sbuh", "sbsh", "sbelih", "cpmp", "sbas", "hsc", "mhl", "sdm", "shh", "som"},
-    "field_status":                     {"active", "inactive"},
-}
-
-FIELD_INTEGER_FIELDS: set[str] = {"field_priority_for_business_cont"}
-DATE_FIELDS: set[str] = {"field_certificate_expiration_dat"}
-
-MAX_RETRIES = 3
-RETRY_DELAY_SECONDS = 5
 
 
 # ---------------------------------------------------------------------------
@@ -136,72 +113,8 @@ def parse_args() -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
-
-def load_config() -> dict:
-    """Load and validate required environment variables from .env."""
-    load_dotenv()
-    required = ["DRUPAL_BASE_URL", "DRUPAL_USERNAME", "DRUPAL_PASSWORD", "DRUPAL_CONTENT_TYPE"]
-    missing = [k for k in required if not os.environ.get(k)]
-    if missing:
-        logger.error("Missing required environment variables: %s", ", ".join(missing))
-        sys.exit(1)
-    return {
-        "base_url": os.environ["DRUPAL_BASE_URL"].rstrip("/"),
-        "username": os.environ["DRUPAL_USERNAME"],
-        "password": os.environ["DRUPAL_PASSWORD"],
-        "content_type": os.environ["DRUPAL_CONTENT_TYPE"],
-    }
-
-
-# ---------------------------------------------------------------------------
-# Progress tracking
-# ---------------------------------------------------------------------------
-
-def load_progress(progress_file: Path) -> set:
-    """Load the set of already-imported (vendor, product) keys from disk."""
-    if not progress_file.exists():
-        return set()
-    try:
-        data = json.loads(progress_file.read_text(encoding="utf-8"))
-        return {tuple(entry) for entry in data.get("completed", [])}
-    except (json.JSONDecodeError, OSError) as exc:
-        logger.warning("Could not read progress file %s: %s — starting fresh", progress_file, exc)
-        return set()
-
-
-def save_progress(progress_file: Path, completed: set, run_stats: dict) -> None:
-    """Write completed keys and run stats to disk atomically."""
-    data = {
-        "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "completed_count": len(completed),
-        "completed": [list(key) for key in sorted(completed)],
-        "last_run": run_stats,
-    }
-    tmp = progress_file.with_suffix(".tmp")
-    try:
-        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
-        tmp.replace(progress_file)
-    except OSError as exc:
-        logger.error("Failed to write progress file %s: %s", progress_file, exc)
-
-
-def mark_complete(progress_file: Path, completed: set, key: tuple, run_stats: dict) -> None:
-    """Add a key to the completed set and flush to disk."""
-    completed.add(key)
-    save_progress(progress_file, completed, run_stats)
-
-
-# ---------------------------------------------------------------------------
 # Spreadsheet loading
 # ---------------------------------------------------------------------------
-
-def clean(value) -> str:
-    """Normalize a cell value to a stripped string; return empty string for blank or nan."""
-    text = str(value or "").strip()
-    return "" if text.lower() == "nan" else text
-
 
 def load_no_description_records(filepath: Path) -> list[dict]:
     """
@@ -307,176 +220,6 @@ def load_no_description_records(filepath: Path) -> list[dict]:
 
     logger.info("Total unique no-description products: %d", len(merged))
     return list(merged.values())
-
-
-# ---------------------------------------------------------------------------
-# Drupal interaction  (mirrors drupal_importer.py)
-# ---------------------------------------------------------------------------
-
-def normalize_list_value(field: str, raw: str) -> str | int | None:
-    """Match a raw value to the exact key Drupal expects for a list field."""
-    allowed = FIELD_ALLOWED_VALUES.get(field)
-    if allowed is None:
-        return raw
-
-    if field in FIELD_INTEGER_FIELDS:
-        with suppress(ValueError, TypeError):
-            raw_int = int(float(raw))
-            if raw_int in allowed:
-                return raw_int
-        return None
-
-    if raw in allowed:
-        return raw
-    raw_lower = raw.lower()
-    for allowed_val in allowed:
-        if allowed_val.lower() == raw_lower:
-            return allowed_val
-
-    candidates = list(allowed)
-    close = difflib.get_close_matches(raw_lower, [c.lower() for c in candidates], n=1, cutoff=0.8)
-    if close:
-        matched = next(c for c in candidates if c.lower() == close[0])
-        logger.warning("Fuzzy-matched %r → %r for %s", raw, matched, field)
-        return matched
-
-    return None
-
-
-def normalize_date_value(raw: str) -> str | None:
-    """Coerce a date value to YYYY-MM-DD."""
-    if not raw:
-        return None
-    date_part = raw.split(" ")[0].split("T")[0]
-    if len(date_part) == 10 and date_part[4] == date_part[7] == "-":
-        return date_part
-    return None
-
-
-def build_payload(record: dict, content_type: str) -> dict:
-    """Transform a record into a Drupal JSON:API POST payload."""
-    vendor = record.get("field_vendor_name", "")
-    product = record.get("field_product_name", "")
-
-    attributes: dict = {"title": f"{vendor} \u2014 {product}"}
-
-    for field, value in record.items():
-        if field == "field_sites_used":
-            allowed = FIELD_ALLOWED_VALUES["field_sites_used"]
-            valid_sites = [s.lower() for s in sorted(value) if s.lower() in allowed]
-            invalid_sites = [s for s in value if s.lower() not in allowed]
-            if invalid_sites:
-                logger.warning(
-                    "'%s — %s': unrecognized site(s) for field_sites_used: %s — skipping",
-                    vendor, product, invalid_sites,
-                )
-            attributes[field] = [{"value": site} for site in valid_sites]
-        elif not value:
-            continue
-        elif field in DATE_FIELDS:
-            normalized = normalize_date_value(str(value))
-            if normalized:
-                attributes[field] = normalized
-            else:
-                logger.warning(
-                    "'%s — %s': unrecognized date value for %s: %r — skipping field",
-                    vendor, product, field, value,
-                )
-        elif field in FIELD_ALLOWED_VALUES:
-            normalized = normalize_list_value(field, str(value))
-            if normalized is not None:
-                attributes[field] = normalized
-            else:
-                logger.warning(
-                    "'%s — %s': unrecognized value for %s: %r — skipping field",
-                    vendor, product, field, value,
-                )
-        else:
-            attributes[field] = value
-
-    return {
-        "data": {
-            "type": f"node--{content_type}",
-            "attributes": attributes,
-        }
-    }
-
-
-def extract_invalid_fields(error_body: str) -> list[str]:
-    """Parse a Drupal 422 response and return field names rejected as invalid choices."""
-    try:
-        data = json.loads(error_body)
-    except (json.JSONDecodeError, ValueError):
-        return []
-
-    invalid_fields = []
-    for error in data.get("errors", []):
-        detail = error.get("detail", "")
-        pointer = error.get("source", {}).get("pointer", "")
-        if "not a valid choice" in detail and pointer:
-            parts = pointer.strip("/").split("/")
-            if len(parts) >= 3 and parts[0] == "data" and parts[1] == "attributes":
-                invalid_fields.append(parts[2])
-    return invalid_fields
-
-
-def post_node_with_retry(
-    session: requests.Session,
-    base_url: str,
-    content_type: str,
-    payload: dict,
-) -> bool:
-    """
-    POST a node to Drupal with retries.
-    On 422 caused by invalid list-field values, strips those fields and retries once.
-    """
-    url = f"{base_url}/jsonapi/node/{content_type}"
-    title = payload["data"]["attributes"].get("title", "?")
-
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            response = session.post(url, json=payload, timeout=30)
-            response.raise_for_status()
-            return True
-
-        except requests.exceptions.HTTPError as exc:
-            status = exc.response.status_code
-            body = exc.response.text[:800]
-            if status == 422:
-                invalid = extract_invalid_fields(exc.response.text)
-                if invalid:
-                    logger.warning(
-                        "HTTP 422 posting '%s' — dropping invalid field(s) and retrying: %s",
-                        title, invalid,
-                    )
-                    for field in invalid:
-                        payload["data"]["attributes"].pop(field, None)
-                    continue
-                logger.error("HTTP 422 posting '%s' (not retrying): %s", title, body)
-                return False
-            if 400 <= status < 500:
-                logger.error("HTTP %s posting '%s' (not retrying): %s", status, title, body)
-                return False
-            logger.warning(
-                "HTTP %s posting '%s' (attempt %d/%d): %s",
-                status, title, attempt, MAX_RETRIES, body,
-            )
-
-        except requests.exceptions.ConnectionError as exc:
-            logger.warning(
-                "Connection error posting '%s' (attempt %d/%d): %s",
-                title, attempt, MAX_RETRIES, exc,
-            )
-
-        except requests.exceptions.Timeout:
-            logger.warning("Timeout posting '%s' (attempt %d/%d)", title, attempt, MAX_RETRIES)
-
-        if attempt < MAX_RETRIES:
-            logger.info("Retrying in %ds...", RETRY_DELAY_SECONDS)
-            time.sleep(RETRY_DELAY_SECONDS)
-
-    logger.error("All %d attempts failed for '%s'", MAX_RETRIES, title)
-    return False
 
 
 # ---------------------------------------------------------------------------
