@@ -17,7 +17,7 @@ spreadsheet_to_drupal:
   "Contains PHI (YES/NO)":             field_contains_phi
   "Mission Critical (YES/NO)":         field_mission_critical
   "Priority for Business Continuity":  field_priority_for_business_cont
-  "Business Criticality Level":        field_business_criticality_level
+  "Business Criticality Level":        field_business_criticality_level  # allowed: core_infrastructure, critical, high, medium, low
   "Description":                       field_description
   "Contract Terms":                    field_contract_terms
   "Certificate Expiration Date":       field_certificate_expiration_dat

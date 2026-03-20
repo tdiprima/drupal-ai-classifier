@@ -1,22 +1,19 @@
 #!/usr/bin/env python3
 """
-drupal_importer.py
+import_no_description.py
 
-One-time ETL import: reads the software inventory spreadsheet,
-merges rows by unique vendor+product (unioning site codes from the
-X-marked site columns), and POSTs one Drupal node per unique product.
+Imports Drupal nodes for spreadsheet rows that have Vendor Name and Product Name
+but a blank Description field — rows that drupal_importer.py currently skips.
 
-Supports resuming interrupted imports — already-imported records are
-tracked in a progress file and skipped on subsequent runs.
+Supports resuming interrupted imports via a progress file.
 
 Usage:
-    python drupal_importer.py --dry-run               # preview without posting
-    python drupal_importer.py                          # live import (or resume)
-    python drupal_importer.py --limit 10              # import first N records only
-    python drupal_importer.py --reset                 # clear progress and start over
-    python drupal_importer.py --spreadsheet /path/to/file.xlsx
-    python drupal_importer.py --progress-file /path/to/progress.json
-    python drupal_importer.py --help
+    python import_no_description.py --dry-run               # preview without posting
+    python import_no_description.py                         # live import (or resume)
+    python import_no_description.py --limit 10              # import first N records only
+    python import_no_description.py --reset                 # clear progress and start over
+    python import_no_description.py --spreadsheet /path/to/file.xlsx
+    python import_no_description.py --help
 
 Required .env variables:
     DRUPAL_BASE_URL       e.g. http://bmi-capella.uhmc.sunysb.edu
@@ -48,15 +45,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 DEFAULT_SPREADSHEET = Path.home() / "Documents" / "misc" / "software_inventory.xlsx"
-DEFAULT_PROGRESS_FILE = Path(__file__).parent.parent / "import_progress.json"
+DEFAULT_PROGRESS_FILE = Path(__file__).parent.parent / "import_nodesc_progress.json"
 
-# Sheets that are metadata/reference — not software rows
 SKIP_SHEETS = {"MASTER Spreadsheet", "Priority Level Definitions", "Dropdowns", "Sheet1"}
-
-# The 8 site columns in the spreadsheet (cell value "X" = used at that site)
 SITE_COLUMNS = ["SBUH", "SBSH", "SBELIH", "CPMP", "SBAS", "HSC", "MHL", "SDM", "SHH", "SOM"]
 
-# Spreadsheet column label (lowercase) → Drupal field machine name
 FIELD_MAP = {
     "division":                           "field_division",
     "vendor name":                        "field_vendor_name",
@@ -75,9 +68,7 @@ FIELD_MAP = {
     "it technical contact":               "field_it_technical_contact",
 }
 
-# Fields that are Drupal list/select type — values must match allowed keys exactly.
-# Case-insensitive matching is attempted; unrecognized values are dropped with a warning.
-FIELD_ALLOWED_VALUES: dict[str, set[str]] = {
+FIELD_ALLOWED_VALUES: dict[str, set] = {
     "field_ai_application":             {"yes", "no"},
     "field_business_criticality_level": {"core_infrastructure", "critical", "high", "medium", "low"},
     "field_confidence":                 {"high", "medium", "low"},
@@ -89,13 +80,9 @@ FIELD_ALLOWED_VALUES: dict[str, set[str]] = {
     "field_status":                     {"active", "inactive"},
 }
 
-# List fields whose keys are integers in the JSON payload (Drupal list_integer type)
 FIELD_INTEGER_FIELDS: set[str] = {"field_priority_for_business_cont"}
-
-# Fields that must be sent as YYYY-MM-DD strings
 DATE_FIELDS: set[str] = {"field_certificate_expiration_dat"}
 
-# How many times to retry a failed POST before giving up
 MAX_RETRIES = 3
 RETRY_DELAY_SECONDS = 5
 
@@ -173,10 +160,7 @@ def load_config() -> dict:
 # ---------------------------------------------------------------------------
 
 def load_progress(progress_file: Path) -> set:
-    """
-    Load the set of already-imported (vendor, product) keys from disk.
-    Returns an empty set if the file does not exist.
-    """
+    """Load the set of already-imported (vendor, product) keys from disk."""
     if not progress_file.exists():
         return set()
     try:
@@ -188,10 +172,7 @@ def load_progress(progress_file: Path) -> set:
 
 
 def save_progress(progress_file: Path, completed: set, run_stats: dict) -> None:
-    """
-    Write the current set of completed keys and run stats to disk.
-    Overwrites the file atomically via a temp file to avoid corruption.
-    """
+    """Write completed keys and run stats to disk atomically."""
     data = {
         "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "completed_count": len(completed),
@@ -207,7 +188,7 @@ def save_progress(progress_file: Path, completed: set, run_stats: dict) -> None:
 
 
 def mark_complete(progress_file: Path, completed: set, key: tuple, run_stats: dict) -> None:
-    """Add a key to the completed set and immediately flush to disk."""
+    """Add a key to the completed set and flush to disk."""
     completed.add(key)
     save_progress(progress_file, completed, run_stats)
 
@@ -222,16 +203,15 @@ def clean(value) -> str:
     return "" if text.lower() == "nan" else text
 
 
-def load_and_merge(filepath: Path) -> list[dict]:
+def load_no_description_records(filepath: Path) -> list[dict]:
     """
-    Read all data sheets, skipping metadata sheets.
-    Rows with the same vendor+product are merged into one record:
-      - field_sites_used is unioned across sheets
-      - For all other fields, the first non-empty value wins; conflicts are logged
-    Returns a list of merged records keyed by Drupal field names.
+    Read all data sheets and return merged records for rows that have
+    Vendor Name and Product Name but a blank Description.
+
+    Rows are merged by vendor+product key the same way as drupal_importer.py.
     """
     wb = openpyxl.load_workbook(filepath, data_only=True)
-    merged = {}  # (vendor_lower, product_lower) → record dict
+    merged: dict[tuple, dict] = {}
 
     for sheet_name in wb.sheetnames:
         if sheet_name.strip() in SKIP_SHEETS:
@@ -268,7 +248,8 @@ def load_and_merge(filepath: Path) -> list[dict]:
             if col_label in header_lower
         }
 
-        logger.info("Sheet '%s': %d data rows", sheet_name.strip(), len(rows) - 1)
+        desc_col = field_col_indices.get("field_description")
+        found_in_sheet = 0
 
         for row in rows[1:]:
             if len(row) <= max(vendor_col, product_col):
@@ -277,15 +258,12 @@ def load_and_merge(filepath: Path) -> list[dict]:
             vendor = clean(row[vendor_col])
             product = clean(row[product_col])
 
-            desc_col = field_col_indices.get("field_description")
-            description = clean(row[desc_col]) if (desc_col is not None and desc_col < len(row)) else ""
+            if not vendor or not product:
+                continue
 
-            if not vendor or not product or not description:
-                missing = [f for f, v in (("vendor", vendor), ("product", product), ("description", description)) if not v]
-                logger.warning(
-                    "Sheet '%s': skipping row — missing required field(s): %s",
-                    sheet_name, ", ".join(missing),
-                )
+            description = clean(row[desc_col]) if (desc_col is not None and desc_col < len(row)) else ""
+            if description:
+                # Has a description — handled by the main importer
                 continue
 
             key = (vendor.lower(), product.lower())
@@ -300,7 +278,7 @@ def load_and_merge(filepath: Path) -> list[dict]:
                 existing = merged[key]
                 existing["field_sites_used"] |= sites
                 for drupal_field, col_idx in field_col_indices.items():
-                    if drupal_field in ("field_vendor_name", "field_product_name"):
+                    if drupal_field in ("field_vendor_name", "field_product_name", "field_description"):
                         continue
                     new_val = clean(row[col_idx]) if col_idx < len(row) else ""
                     old_val = existing.get(drupal_field, "")
@@ -310,46 +288,44 @@ def load_and_merge(filepath: Path) -> list[dict]:
                             vendor, product, drupal_field, old_val, new_val,
                         )
             else:
-                record = {
+                record: dict = {
                     "field_vendor_name": vendor,
                     "field_product_name": product,
                     "field_sites_used": sites,
                 }
                 for drupal_field, col_idx in field_col_indices.items():
+                    if drupal_field == "field_description":
+                        continue
                     val = clean(row[col_idx]) if col_idx < len(row) else ""
                     if val:
                         record[drupal_field] = val
                 merged[key] = record
+                found_in_sheet += 1
 
-    logger.info("Total unique products after merging: %d", len(merged))
+        if found_in_sheet:
+            logger.info("Sheet '%s': %d no-description row(s)", sheet_name.strip(), found_in_sheet)
+
+    logger.info("Total unique no-description products: %d", len(merged))
     return list(merged.values())
 
 
 # ---------------------------------------------------------------------------
-# Drupal interaction
+# Drupal interaction  (mirrors drupal_importer.py)
 # ---------------------------------------------------------------------------
 
 def normalize_list_value(field: str, raw: str) -> str | int | None:
-    """
-    Match a raw spreadsheet value to the exact key Drupal expects for a list field.
-    Returns an int for fields in FIELD_INTEGER_FIELDS, otherwise a str.
-    Returns None if the value cannot be matched to any allowed key.
-    """
+    """Match a raw value to the exact key Drupal expects for a list field."""
     allowed = FIELD_ALLOWED_VALUES.get(field)
     if allowed is None:
-        return raw  # not a constrained field — pass through as-is
+        return raw
 
-    is_int_field = field in FIELD_INTEGER_FIELDS
-
-    # For integer fields, coerce raw to int for comparison (handles "5", "5.0")
-    if is_int_field:
+    if field in FIELD_INTEGER_FIELDS:
         with suppress(ValueError, TypeError):
             raw_int = int(float(raw))
             if raw_int in allowed:
                 return raw_int
         return None
 
-    # String fields: exact match, then case-insensitive
     if raw in allowed:
         return raw
     raw_lower = raw.lower()
@@ -357,7 +333,6 @@ def normalize_list_value(field: str, raw: str) -> str | int | None:
         if allowed_val.lower() == raw_lower:
             return allowed_val
 
-    # Fuzzy match — catches typos like "Critcal" → "critical"
     candidates = list(allowed)
     close = difflib.get_close_matches(raw_lower, [c.lower() for c in candidates], n=1, cutoff=0.8)
     if close:
@@ -369,14 +344,9 @@ def normalize_list_value(field: str, raw: str) -> str | int | None:
 
 
 def normalize_date_value(raw: str) -> str | None:
-    """
-    Coerce a date value to YYYY-MM-DD.
-    openpyxl may return datetime strings like '2024-01-15 00:00:00'.
-    Returns None if the value cannot be recognized as a date.
-    """
+    """Coerce a date value to YYYY-MM-DD."""
     if not raw:
         return None
-    # Strip time portion if present
     date_part = raw.split(" ")[0].split("T")[0]
     if len(date_part) == 10 and date_part[4] == date_part[7] == "-":
         return date_part
@@ -384,14 +354,14 @@ def normalize_date_value(raw: str) -> str | None:
 
 
 def build_payload(record: dict, content_type: str) -> dict:
-    """Transform a merged record into a Drupal JSON:API POST payload."""
+    """Transform a record into a Drupal JSON:API POST payload."""
     vendor = record.get("field_vendor_name", "")
     product = record.get("field_product_name", "")
 
-    attributes = {"title": f"{vendor} — {product}"}
+    attributes: dict = {"title": f"{vendor} \u2014 {product}"}
+
     for field, value in record.items():
         if field == "field_sites_used":
-            # Multi-value list field — lowercase keys, object format required by JSON:API
             allowed = FIELD_ALLOWED_VALUES["field_sites_used"]
             valid_sites = [s.lower() for s in sorted(value) if s.lower() in allowed]
             invalid_sites = [s for s in value if s.lower() not in allowed]
@@ -414,7 +384,7 @@ def build_payload(record: dict, content_type: str) -> dict:
                 )
         elif field in FIELD_ALLOWED_VALUES:
             normalized = normalize_list_value(field, str(value))
-            if normalized:
+            if normalized is not None:
                 attributes[field] = normalized
             else:
                 logger.warning(
@@ -433,11 +403,7 @@ def build_payload(record: dict, content_type: str) -> dict:
 
 
 def extract_invalid_fields(error_body: str) -> list[str]:
-    """
-    Parse a Drupal JSON:API 422 response and return field names whose values
-    were rejected as invalid choices (e.g. list/select fields with bad keys).
-    Returns an empty list if the body cannot be parsed or no such errors exist.
-    """
+    """Parse a Drupal 422 response and return field names rejected as invalid choices."""
     try:
         data = json.loads(error_body)
     except (json.JSONDecodeError, ValueError):
@@ -448,7 +414,6 @@ def extract_invalid_fields(error_body: str) -> list[str]:
         detail = error.get("detail", "")
         pointer = error.get("source", {}).get("pointer", "")
         if "not a valid choice" in detail and pointer:
-            # pointer looks like /data/attributes/field_foo/0
             parts = pointer.strip("/").split("/")
             if len(parts) >= 3 and parts[0] == "data" and parts[1] == "attributes":
                 invalid_fields.append(parts[2])
@@ -462,10 +427,8 @@ def post_node_with_retry(
     payload: dict,
 ) -> bool:
     """
-    POST a single node to Drupal, retrying on transient connection errors.
-    Returns True on success, False if all attempts fail.
-    On a 422 caused by invalid list-field values, strips those fields and
-    retries once — so one bad field value does not discard the whole record.
+    POST a node to Drupal with retries.
+    On 422 caused by invalid list-field values, strips those fields and retries once.
     """
     url = f"{base_url}/jsonapi/node/{content_type}"
     title = payload["data"]["attributes"].get("title", "?")
@@ -488,19 +451,12 @@ def post_node_with_retry(
                     )
                     for field in invalid:
                         payload["data"]["attributes"].pop(field, None)
-                    continue  # retry immediately with cleaned payload
-                # 422 with no parseable invalid fields — give up
-                logger.error(
-                    "HTTP 422 posting '%s' (not retrying): %s", title, body
-                )
+                    continue
+                logger.error("HTTP 422 posting '%s' (not retrying): %s", title, body)
                 return False
             if 400 <= status < 500:
-                # Other client error — retrying won't help
-                logger.error(
-                    "HTTP %s posting '%s' (not retrying): %s", status, title, body
-                )
+                logger.error("HTTP %s posting '%s' (not retrying): %s", status, title, body)
                 return False
-            # Server error — worth retrying
             logger.warning(
                 "HTTP %s posting '%s' (attempt %d/%d): %s",
                 status, title, attempt, MAX_RETRIES, body,
@@ -513,9 +469,7 @@ def post_node_with_retry(
             )
 
         except requests.exceptions.Timeout:
-            logger.warning(
-                "Timeout posting '%s' (attempt %d/%d)", title, attempt, MAX_RETRIES
-            )
+            logger.warning("Timeout posting '%s' (attempt %d/%d)", title, attempt, MAX_RETRIES)
 
         if attempt < MAX_RETRIES:
             logger.info("Retrying in %ds...", RETRY_DELAY_SECONDS)
@@ -543,7 +497,6 @@ def main() -> None:
         logger.error("Spreadsheet not found: %s", spreadsheet)
         sys.exit(1)
 
-    # Handle --reset before loading progress
     if args["reset"]:
         if progress_file.exists():
             progress_file.unlink()
@@ -552,7 +505,7 @@ def main() -> None:
             logger.info("No progress file found — nothing to reset")
 
     logger.info("Loading spreadsheet: %s", spreadsheet)
-    records = load_and_merge(spreadsheet)
+    records = load_no_description_records(spreadsheet)
 
     if args["limit"]:
         records = records[: args["limit"]]
@@ -560,9 +513,6 @@ def main() -> None:
 
     total = len(records)
 
-    # -----------------------------------------------------------------------
-    # Dry run
-    # -----------------------------------------------------------------------
     if args["dry_run"]:
         logger.info("DRY RUN — no nodes will be posted to Drupal")
         for record in records:
@@ -576,9 +526,6 @@ def main() -> None:
         logger.info("Would create %d node(s)", total)
         return
 
-    # -----------------------------------------------------------------------
-    # Live import
-    # -----------------------------------------------------------------------
     completed = load_progress(progress_file)
     already_done = len(completed)
     if already_done:
@@ -594,8 +541,6 @@ def main() -> None:
         "Accept": "application/vnd.api+json",
         "Content-Type": "application/vnd.api+json",
     })
-    # NOTE: verify=False is acceptable for internal university servers.
-    # Remove before any public-facing deployment.
     session.verify = False
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -615,7 +560,7 @@ def main() -> None:
         for i, record in enumerate(records, 1):
             vendor = record.get("field_vendor_name", "")
             product = record.get("field_product_name", "")
-            title = f"{vendor} — {product}"
+            title = f"{vendor} \u2014 {product}"
             key = (vendor.lower(), product.lower())
 
             if key in completed:
@@ -630,7 +575,6 @@ def main() -> None:
                 succeeded += 1
                 run_stats.update({"succeeded": succeeded, "failed": failed, "skipped": skipped})
                 mark_complete(progress_file, completed, key, run_stats)
-                logger.debug("  Saved to progress file")
             else:
                 failed += 1
                 run_stats.update({"succeeded": succeeded, "failed": failed, "skipped": skipped})
@@ -651,8 +595,8 @@ def main() -> None:
         save_progress(progress_file, completed, run_stats)
 
         logger.info("=" * 60)
-        logger.info("IMPORT SUMMARY")
-        logger.info("  Total in spreadsheet : %d", total)
+        logger.info("IMPORT (NO DESCRIPTION) SUMMARY")
+        logger.info("  Total found          : %d", total)
         logger.info("  Skipped (done prior) : %d", skipped)
         logger.info("  Succeeded this run   : %d", succeeded)
         logger.info("  Failed this run      : %d", failed)
