@@ -38,11 +38,11 @@ import logging
 import os
 import sys
 import time
-import urllib3
 from datetime import datetime
 from pathlib import Path
 
 import requests
+import urllib3
 from dotenv import load_dotenv
 from openai import AzureOpenAI
 

@@ -24,20 +24,16 @@ import logging
 import os
 import sys
 import time
-import urllib3
 from collections import defaultdict
 from pathlib import Path
 
 import requests
+import urllib3
 from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).parent))
-from drupal_importer import (
-    normalize_list_value,
-    normalize_date_value,
-    FIELD_ALLOWED_VALUES,
-    DATE_FIELDS,
-)
+from drupal_importer import (DATE_FIELDS, FIELD_ALLOWED_VALUES,
+                             normalize_date_value, normalize_list_value)
 from drupal_patcher import fetch_all_nodes
 
 logging.basicConfig(

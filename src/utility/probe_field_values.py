@@ -13,9 +13,9 @@ Usage:
 import json
 import os
 import sys
-import urllib3
 
 import requests
+import urllib3
 from dotenv import load_dotenv
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -132,7 +132,7 @@ def probe_field(
     if valid_keys:
         print(f"    VALID keys: {valid_keys}")
     else:
-        print(f"    No valid keys found from candidates list")
+        print("    No valid keys found from candidates list")
 
 
 def main() -> None:
@@ -165,7 +165,7 @@ def main() -> None:
     for field_name in fields:
         probe_field(session, base_url, content_type, field_name, CANDIDATES[field_name])
 
-    print(f"\nDone. Verify no leftover probe nodes at:")
+    print("\nDone. Verify no leftover probe nodes at:")
     print(f"  {base_url}/admin/content?title={PROBE_TITLE_PREFIX}")
 
 

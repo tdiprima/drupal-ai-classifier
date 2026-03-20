@@ -17,9 +17,9 @@ import logging
 import os
 import sys
 import time
-import urllib3
 
 import requests
+import urllib3
 from dotenv import load_dotenv
 
 logging.basicConfig(

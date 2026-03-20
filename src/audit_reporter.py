@@ -28,29 +28,20 @@ import logging
 import os
 import sys
 import time
-import urllib3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
 
 import openpyxl
 import requests
+import urllib3
 from dotenv import load_dotenv
 
 # Reuse constants and normalization functions from the importer
 sys.path.insert(0, str(Path(__file__).parent))
-from drupal_importer import (
-    clean,
-    normalize_list_value,
-    normalize_date_value,
-    SKIP_SHEETS,
-    SITE_COLUMNS,
-    FIELD_MAP,
-    FIELD_ALLOWED_VALUES,
-    FIELD_INTEGER_FIELDS,
-    DATE_FIELDS,
-    DEFAULT_SPREADSHEET,
-)
+from drupal_importer import (DATE_FIELDS, DEFAULT_SPREADSHEET,
+                             FIELD_ALLOWED_VALUES, FIELD_MAP, SITE_COLUMNS,
+                             SKIP_SHEETS, clean, normalize_date_value,
+                             normalize_list_value)
 
 # ---------------------------------------------------------------------------
 # Logging
