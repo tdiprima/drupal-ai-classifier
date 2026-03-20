@@ -53,8 +53,12 @@ def fetch_nodes(session: requests.Session, base_url: str, content_type: str) -> 
             nodes.append({
                 "uuid": node.get("id"),
                 "title": attrs.get("title", "(no title)"),
-                "fields": {f: attrs.get(f) for f in AI_FIELDS},
+                "fields": {
+                    field: attrs.get(field)
+                    for field in AI_FIELDS
+                },
             })
+        # "https://example.com/jsonapi/node/article?page[offset]=50"
         url = body.get("links", {}).get("next", {}).get("href")
     return nodes
 
