@@ -57,6 +57,19 @@ Output Format:
 
 ---
 
+### Why This Prompt Is Better
+
+🔹 **Clear role assignment** – tells the model to behave as a Drupal/Python expert.  
+🔹 **Structured context** – separates the timeline of what happened.  
+🔹 **Explicit tasks** – analysis, recovery strategy, and code.  
+🔹 **Technical constraints** – forces reuse of `drupal_importer.py`.  
+🔹 **Better output format** – increases the chance of getting a useful answer instead of vague advice.
+
+✅ **Prompt Engineering Tip:**  
+Whenever debugging data pipelines, structure prompts into **Context → Change Introduced → Problem → Task → Constraints → Output Format**. This helps the model reason through the failure chain more reliably.
+
+---
+
 ## Solution
 
 Root cause analysis — why the dedup deleted too many nodes
