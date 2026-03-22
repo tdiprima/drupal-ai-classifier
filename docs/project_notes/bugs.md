@@ -14,56 +14,11 @@
 
 ---
 
-## The prompt
+## The problem
 
-You are an experienced Drupal developer and Python data engineer. 
-
-Context:
-We are importing records from an XLSX file (~/Documents/misc/software_inventory. xlsx) into Drupal using a Python script called `drupal_importer.py`.  The original import logic only created Drupal nodes when the following XLSX columns were all present:
-
-- Vendor Name
-- Product Name
-- Description
-
-Later, the import logic was modified so that rows would also be imported when:
-
-- Vendor Name is present
-- Product Name is present
-- Description is blank
-
-This change was made because the rows with descriptions had already been imported previously. 
-
-After this change, a deduplication program was run (patch/`drupal_dedup.py`), but it appears that it removed too many Drupal nodes. 
-
-Task:
-
-1.  Analyze the likely causes of why the deduplication process may have deleted too many nodes. 
-2.  Propose a safe strategy to identify which nodes were incorrectly removed. 
-3.  Recommend a recovery strategy (e. g. , rebuilding from the XLSX source, restoring from backups, or re-running a corrected import). 
-4.  Provide Python code examples where appropriate. 
-
-Technical Requirements:
-
-- Reuse existing functions, helpers, and field mappings from `drupal_importer.py` whenever possible. 
-- Avoid introducing redundant logic if equivalent utilities already exist in the script. 
-- Ensure the proposed fix avoids creating duplicate nodes. 
-- If rebuilding or reconciling data, suggest a deterministic key (e. g. , Vendor Name + Product Name) to match records. 
-
-Output Format:
-
-- Step-by-step explanation of the issue
-- Recommended recovery plan
-- Example Python code that integrates with `drupal_importer.py`
+I think I goofed. Originally, we uploaded records from xlsx to drupal if the values in colums "Vendor Name", "Product Name", AND "Description" were present. Then I decided to add rows where "Vendor Name" and "Product Name", had to be present, but "Description" was blank (because we already uploaded ones WITH the description. Then I ran a deduplicating program, and I think it deleted too many nodes. What would be your recommendation to fix this? When writing code, please be sure to reuse fields and functions from drupal_importer.py.
 
 ---
-
-### Why This Prompt Is Better
-
-🔹 **Clear role assignment** – tells the model to behave as a Drupal/Python expert.  
-🔹 **Structured context** – separates the timeline of what happened.  
-🔹 **Explicit tasks** – analysis, recovery strategy, and code.  
-🔹 **Technical constraints** – forces reuse of `drupal_importer.py`.  
-🔹 **Better output format** – increases the chance of getting a useful answer instead of vague advice.
 
 ✅ **Prompt Engineering Tip:**  
 Whenever debugging data pipelines, structure prompts into **Context → Change Introduced → Problem → Task → Constraints → Output Format**. This helps the model reason through the failure chain more reliably.
