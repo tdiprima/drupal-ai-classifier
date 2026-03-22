@@ -2,7 +2,7 @@
 
 ## Template
 
-### 2026-03-20 - BUG-001: Deduped
+### 2026-03-20 - BUG-001: "Deduped"
 
 **Issue**: I erased too many records
 
@@ -16,7 +16,7 @@
 
 ## The problem
 
-I think I goofed. Originally, we uploaded records from xlsx to drupal if the values in colums "Vendor Name", "Product Name", AND "Description" were present. Then I decided to add rows where "Vendor Name" and "Product Name", had to be present, but "Description" was blank (because we already uploaded ones WITH the description. Then I ran a deduplicating program, and I think it deleted too many nodes. What would be your recommendation to fix this? When writing code, please be sure to reuse fields and functions from drupal_importer.py.
+I think I goofed. Originally, we uploaded records from xlsx to drupal if the values in colums "Vendor Name", "Product Name", AND "Description" were present. Then I decided to add rows where "Vendor Name" and "Product Name", had to be present, but "Description" was blank (because we already uploaded ones WITH the description. Then I ran a deduplicating program, and I think it deleted too many nodes.
 
 ---
 
