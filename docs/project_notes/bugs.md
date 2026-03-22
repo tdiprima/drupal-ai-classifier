@@ -6,7 +6,7 @@
 
 **Issue**: I erased too many records
 
-**Root Cause**: Ran script `X` 3 times, then panicked and ran `drupal_dedup. py` again. It wasn't the proper way to dedupe the 2nd time. 
+**Root Cause**: Ran script `X` 3 times, then panicked and ran `drupal_dedup.py` again. It wasn't the proper way to dedupe the 2nd time. 
 
 **Solution**: Gave the whole mess to Claude, who wrote `drupal_recovery.py`. 
 
