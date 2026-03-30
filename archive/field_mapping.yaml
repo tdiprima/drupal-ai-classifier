@@ -1,0 +1,61 @@
+# field_mapping.yaml
+#
+# Maps spreadsheet column names → Drupal JSON:API field machine names.
+# Used by the ETL/integration layer to transform rows before POSTing to Drupal.
+#
+# Sections:
+#   spreadsheet_to_drupal  — direct column-to-field mappings (source of truth: spreadsheet)
+#   scanner_output_fields  — fields populated by the AI scanner, not the spreadsheet
+#   unmapped_spreadsheet   — spreadsheet columns with no clear Drupal field match
+#   unmapped_drupal        — Drupal fields with no spreadsheet column match
+
+spreadsheet_to_drupal:
+  "Division":                          field_division
+  "Vendor Name":                       field_vendor_name
+  "Status":                            field_status
+  "Product Name":                      field_product_name
+  "Contains PHI (YES/NO)":             field_contains_phi
+  "Mission Critical (YES/NO)":         field_mission_critical
+  "Priority for Business Continuity":  field_priority_for_business_cont
+  "Business Criticality Level":        field_business_criticality_level  # allowed: core_infrastructure, critical, high, medium, low
+  "Description":                       field_description
+  "Contract Terms":                    field_contract_terms
+  "Certificate Expiration Date":       field_certificate_expiration_dat
+  "Responisible Dept/Category":        field_responsible_dept_category   # note: typo in source
+  "Business Sponsor Name/Phone Number": field_business_sponsor_name_phon
+  "IT Director/ Manager":              field_it_director_manager
+  "IT Technical Contact":              field_it_technical_contact
+
+# These fields are written by the AI scanner after analysis — not from the spreadsheet.
+scanner_output_fields:
+  - field_ai_application     # YES / NO / UNKNOWN
+  - field_confidence         # HIGH / MEDIUM / LOW
+  - field_reason             # one-sentence explanation
+  - field_risk_review_required  # boolean
+  - field_ai_notes           # freeform scanner notes
+
+# The 8 site columns in the spreadsheet contain an "X" if the software is used
+# at that site, or are empty. The ETL logic should collect all site codes where
+# the cell value is "X" (case-insensitive) and write them as an array to
+# field_sites_used. Drupal limits this field to 8 values, which matches exactly.
+sites_used:
+  drupal_field: field_sites_used
+  drupal_type: array          # multi-value field, max 8
+  spreadsheet_columns:
+    - SBUH
+    - SBSH
+    - SBELIH
+    - CPMP
+    - SBAS
+    - HSC
+    - MHL
+    - SDM
+  transform: collect_marked   # include column name in array if cell value == "X"
+
+# These Drupal fields have no corresponding spreadsheet column.
+# They are entered manually in Drupal by staff.
+manually_entered_drupal:
+  field_sra:
+    label: "Security Risk Assessment"
+    allowed_values: ["Yes", "No", "Annual"]
+    source: "Word document provided by Andy — not present in the spreadsheet"
