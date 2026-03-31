@@ -5,18 +5,24 @@ drupal_ai_scanner.py
 Fetches Drupal nodes of type `new_product`, runs each through the Azure OpenAI
 AI scanner, and PATCHes the results back onto the node.
 
-Field mappings (Drupal ← AI scanner output):
-    field_ai_application      ← has_ai        ("yes" / "no")
-    field_confidence          ← confidence    ("low" / "medium" / "high")
-    field_reason              ← reason        (truncated to 256 chars)
-    field_risk_review_required ← needs_review ("yes" / "no")
+**Incremental mode (default):** After the initial full scan, only new or
+modified nodes are processed.  Each scanned node's Drupal `changed` timestamp
+is recorded; on subsequent runs the script asks Drupal for nodes changed after
+the most recent recorded timestamp, so unchanged nodes are never re-fetched or
+re-scanned.
+
+Field mappings (Drupal <- AI scanner output):
+    field_ai_application       <- has_ai        ("yes" / "no")
+    field_confidence           <- confidence    ("low" / "medium" / "high")
+    field_reason               <- reason        (truncated to 256 chars)
+    field_risk_review_required <- needs_review  ("yes" / "no")
 
 Progress is persisted to a JSON file so interrupted runs resume cleanly.
 The first run processes only 10 nodes; subsequent runs process all remaining.
 
 Usage:
-    python drupal_ai_scanner.py                  # first run: 10 nodes
-    python drupal_ai_scanner.py                  # resume: all remaining
+    python drupal_ai_scanner.py                  # incremental: new/changed only
+    python drupal_ai_scanner.py --full           # force full rescan of all nodes
     python drupal_ai_scanner.py --limit 25       # explicit batch size
     python drupal_ai_scanner.py --reset          # clear progress and restart
     python drupal_ai_scanner.py --dry-run        # preview without patching
@@ -72,6 +78,7 @@ def parse_args() -> dict:
     dry_run = "--dry-run" in args
     debug = "--debug" in args
     reset = "--reset" in args
+    full = "--full" in args
     limit = None
 
     if "--limit" in args:
@@ -87,6 +94,7 @@ def parse_args() -> dict:
         "dry_run": dry_run,
         "debug": debug,
         "reset": reset,
+        "full": full,
         "limit": limit,
     }
 
@@ -120,27 +128,48 @@ def load_config() -> dict:
 def load_progress(progress_file: Path) -> dict:
     """
     Load persisted progress from disk.
-    Returns a dict with 'completed' (set of UUIDs) and 'is_first_run' flag.
+
+    Returns a dict with:
+        'nodes'        — {uuid: {"scanned_at": str, "node_changed": str}}
+        'is_first_run' — True if no progress file existed
     """
     if not progress_file.exists():
-        return {"completed": set(), "is_first_run": True}
+        return {"nodes": {}, "is_first_run": True}
     try:
         data = json.loads(progress_file.read_text(encoding="utf-8"))
-        return {
-            "completed": set(data.get("completed", [])),
-            "is_first_run": False,
-        }
+        return _parse_progress_data(data)
     except (json.JSONDecodeError, OSError) as exc:
         logger.warning("Could not read progress file: %s — starting fresh", exc)
-        return {"completed": set(), "is_first_run": True}
+        return {"nodes": {}, "is_first_run": True}
 
 
-def save_progress(progress_file: Path, completed: set, stats: dict) -> None:
+def _parse_progress_data(data: dict) -> dict:
+    """Parse progress data, migrating from old format if necessary."""
+    # New format: nodes is a dict of {uuid: {scanned_at, node_changed}}
+    if "nodes" in data and isinstance(data["nodes"], dict):
+        return {"nodes": data["nodes"], "is_first_run": False}
+
+    # Old format: "completed" is a list of UUID strings — migrate
+    if "completed" in data and isinstance(data["completed"], list):
+        logger.info("Migrating old progress format to incremental format")
+        last_updated = data.get("last_updated", "1970-01-01T00:00:00+00:00")
+        nodes = {}
+        for uuid in data["completed"]:
+            nodes[uuid] = {
+                "scanned_at": last_updated,
+                "node_changed": "1970-01-01T00:00:00+00:00",
+            }
+        return {"nodes": nodes, "is_first_run": False}
+
+    return {"nodes": {}, "is_first_run": True}
+
+
+def save_progress(progress_file: Path, nodes: dict, stats: dict) -> None:
     """Atomically write progress to disk via a temp file."""
     data = {
         "last_updated": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "completed_count": len(completed),
-        "completed": sorted(completed),
+        "completed_count": len(nodes),
+        "nodes": nodes,
         "last_run": stats,
     }
     tmp = progress_file.with_suffix(".tmp")
@@ -151,59 +180,136 @@ def save_progress(progress_file: Path, completed: set, stats: dict) -> None:
         logger.error("Failed to write progress file: %s", exc)
 
 
+def latest_scanned_timestamp(nodes: dict) -> str | None:
+    """
+    Return the most recent 'node_changed' value across all tracked nodes.
+    Used to build a Drupal filter for incremental fetches.
+    """
+    if not nodes:
+        return None
+    timestamps = [
+        entry["node_changed"]
+        for entry in nodes.values()
+        if entry.get("node_changed") and entry["node_changed"] != "1970-01-01T00:00:00+00:00"
+    ]
+    return max(timestamps) if timestamps else None
+
+
 # ---------------------------------------------------------------------------
 # Drupal: fetching nodes
 # ---------------------------------------------------------------------------
 
-def fetch_nodes(
+def fetch_all_nodes(
     session: requests.Session,
     base_url: str,
     content_type: str,
-    completed: set,
 ) -> list[dict]:
     """
-    Fetch all nodes of the given content type, returning only those not yet
-    in the completed set. Handles JSON:API pagination automatically.
+    Fetch all nodes of the given content type, including the `changed`
+    timestamp. Returns every node without filtering.
     """
-    pending = []
+    return _paginate_nodes(session, base_url, content_type, extra_params={})
+
+
+def fetch_nodes_changed_since(
+    session: requests.Session,
+    base_url: str,
+    content_type: str,
+    since: str,
+) -> list[dict]:
+    """
+    Fetch only nodes whose Drupal `changed` timestamp is greater than `since`.
+    Falls back to a full fetch if the server rejects the filter.
+    """
+    filter_params = {
+        "filter[changed][condition][path]": "changed",
+        "filter[changed][condition][operator]": ">",
+        "filter[changed][condition][value]": since,
+    }
+    try:
+        nodes = _paginate_nodes(session, base_url, content_type, extra_params=filter_params)
+        return nodes
+    except RuntimeError:
+        logger.warning("Drupal rejected the date filter — falling back to full fetch")
+        return fetch_all_nodes(session, base_url, content_type)
+
+
+def _paginate_nodes(
+    session: requests.Session,
+    base_url: str,
+    content_type: str,
+    extra_params: dict,
+) -> list[dict]:
+    """
+    Walk JSON:API pagination and return parsed node dicts.
+    Raises RuntimeError if the first page returns a non-200 status.
+    """
+    nodes = []
     url = f"{base_url}/jsonapi/node/{content_type}"
     params = {
         f"fields[node--{content_type}]": (
-            "id,title,field_vendor_name,field_product_name,field_description"
+            "id,title,changed,"
+            "field_vendor_name,field_product_name,field_description"
         ),
         "page[limit]": PAGE_SIZE,
     }
+    params.update(extra_params)
 
     page = 0
     while url:
         page += 1
         response = session.get(url, params=params if page == 1 else None, timeout=30)
+
         if response.status_code != 200:
-            logger.error("Failed to fetch nodes (HTTP %s)", response.status_code)
-            sys.exit(1)
+            if page == 1:
+                raise RuntimeError(f"HTTP {response.status_code}")
+            logger.error("Failed to fetch page %d (HTTP %s)", page, response.status_code)
+            break
 
         body = response.json()
         for node in body.get("data", []):
             uuid = node.get("id", "")
-            if uuid and uuid not in completed:
-                attrs = node.get("attributes", {})
-                pending.append({
-                    "uuid": uuid,
-                    "title": attrs.get("title", ""),
-                    "vendor": attrs.get("field_vendor_name") or "",
-                    "product": attrs.get("field_product_name") or "",
-                    "description": attrs.get("field_description") or "",
-                })
+            if not uuid:
+                continue
+            attrs = node.get("attributes", {})
+            nodes.append({
+                "uuid": uuid,
+                "title": attrs.get("title", ""),
+                "vendor": attrs.get("field_vendor_name") or "",
+                "product": attrs.get("field_product_name") or "",
+                "description": attrs.get("field_description") or "",
+                "changed": attrs.get("changed") or "",
+            })
 
         url = body.get("links", {}).get("next", {}).get("href")
-        params = None  # params are encoded in the next link
+        params = None
 
-    logger.info("Found %d node(s) not yet scanned", len(pending))
+    return nodes
+
+
+def filter_pending_nodes(
+    fetched_nodes: list[dict],
+    tracked_nodes: dict,
+) -> list[dict]:
+    """
+    From a list of fetched Drupal nodes, return only those that need scanning:
+      - UUID not in tracked_nodes (new)
+      - node's `changed` timestamp is newer than what we recorded (modified)
+    """
+    pending = []
+    for node in fetched_nodes:
+        uuid = node["uuid"]
+        if uuid not in tracked_nodes:
+            pending.append(node)
+            continue
+        recorded_changed = tracked_nodes[uuid].get("node_changed", "")
+        if node["changed"] and node["changed"] > recorded_changed:
+            pending.append(node)
     return pending
 
 
 # ---------------------------------------------------------------------------
-# AI result → Drupal attribute mapping
+# AI result -> Drupal attribute mapping
 # ---------------------------------------------------------------------------
 
 def map_ai_result_to_attributes(ai_result: dict) -> dict | None:
@@ -218,15 +324,12 @@ def map_ai_result_to_attributes(ai_result: dict) -> dict | None:
     if has_ai == "ERROR":
         return None
 
-    # UNKNOWN is treated conservatively as a potential AI application
     ai_application = "yes" if has_ai in ("YES", "UNKNOWN") else "no"
     needs_review = "yes" if has_ai in ("YES", "UNKNOWN") else "no"
 
-    # Clamp confidence to known Drupal keys
     if confidence not in ("low", "medium", "high"):
         confidence = "low"
 
-    # Truncate reason to 256 characters at a word boundary
     if len(reason) > 256:
         reason = reason[:253].rsplit(" ", 1)[0] + "..."
 
@@ -294,16 +397,14 @@ def main() -> None:
             logger.info("Progress cleared — starting from scratch")
 
     progress = load_progress(progress_file)
-    completed: set = progress["completed"]
+    tracked_nodes: dict = progress["nodes"]
     is_first_run: bool = progress["is_first_run"]
 
-    # First run defaults to 10 nodes as a sanity check; subsequent runs get all remaining
     limit = args["limit"]
     if limit is None and is_first_run:
         limit = FIRST_RUN_LIMIT
         logger.info("First run — limiting to %d node(s). Use --limit to override.", limit)
 
-    # Build the HTTP session for Drupal
     session = requests.Session()
     session.auth = (config["username"], config["password"])
     session.headers.update({
@@ -312,7 +413,6 @@ def main() -> None:
     })
     session.verify = False
 
-    # Build the Azure OpenAI client
     ai_client = AzureOpenAI(
         azure_endpoint=config["azure_endpoint"],
         api_key=config["azure_api_key"],
@@ -320,21 +420,36 @@ def main() -> None:
     )
     deployment = config["azure_deployment"]
 
-    logger.info("Fetching pending nodes from Drupal...")
-    nodes = fetch_nodes(session, config["base_url"], config["content_type"], completed)
+    # ----- Fetch nodes: incremental or full -----
+    force_full = args["full"] or is_first_run
+    since = latest_scanned_timestamp(tracked_nodes)
+
+    if force_full or since is None:
+        logger.info("Fetching all nodes from Drupal...")
+        fetched = fetch_all_nodes(session, config["base_url"], config["content_type"])
+        nodes = filter_pending_nodes(fetched, tracked_nodes)
+    else:
+        logger.info("Incremental scan — fetching nodes changed since %s", since)
+        nodes = fetch_nodes_changed_since(
+            session, config["base_url"], config["content_type"], since,
+        )
+
+    logger.info("Found %d node(s) needing AI scan", len(nodes))
 
     if limit:
         nodes = nodes[:limit]
         logger.info("Processing %d node(s) this run", len(nodes))
 
     if not nodes:
-        logger.info("Nothing to process — all nodes already scanned")
+        logger.info("Nothing to process — all nodes are up to date")
         return
 
     if args["dry_run"]:
         logger.info("DRY RUN — no nodes will be patched")
         for node in nodes:
-            logger.info("  Would scan: %s", node["title"])
+            uuid = node["uuid"]
+            status = "NEW" if uuid not in tracked_nodes else "MODIFIED"
+            logger.info("  [%s] %s", status, node["title"])
         return
 
     total = len(nodes)
@@ -348,9 +463,9 @@ def main() -> None:
         for i, node in enumerate(nodes, 1):
             uuid = node["uuid"]
             title = node["title"]
-            logger.info("[%d/%d] %s", i, total, title)
+            status = "NEW" if uuid not in tracked_nodes else "MODIFIED"
+            logger.info("[%d/%d] [%s] %s", i, total, status, title)
 
-            # Build the entry dict expected by check_for_ai
             entry = {
                 "vendor": node["vendor"],
                 "product": node["product"],
@@ -359,7 +474,7 @@ def main() -> None:
 
             ai_result = check_for_ai(ai_client, deployment, entry)
             logger.info(
-                "  → has_ai=%s  confidence=%s",
+                "  -> has_ai=%s  confidence=%s",
                 ai_result["has_ai"], ai_result["confidence"],
             )
 
@@ -373,9 +488,12 @@ def main() -> None:
 
             if patch_node(session, config["base_url"], config["content_type"], uuid, payload, title):
                 succeeded += 1
-                completed.add(uuid)
+                tracked_nodes[uuid] = {
+                    "scanned_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "node_changed": node["changed"],
+                }
                 stats.update({"succeeded": succeeded, "failed": failed})
-                save_progress(progress_file, completed, stats)
+                save_progress(progress_file, tracked_nodes, stats)
                 logger.debug("  Progress saved")
             else:
                 failed += 1
@@ -391,14 +509,14 @@ def main() -> None:
             "finished": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "elapsed_seconds": round(elapsed, 1),
         })
-        save_progress(progress_file, completed, stats)
+        save_progress(progress_file, tracked_nodes, stats)
 
         logger.info("=" * 60)
         logger.info("SCAN SUMMARY")
         logger.info("  Processed this run : %d", total)
         logger.info("  Succeeded          : %d", succeeded)
         logger.info("  Failed             : %d", failed)
-        logger.info("  Total completed    : %d", len(completed))
+        logger.info("  Total tracked      : %d", len(tracked_nodes))
         logger.info("  Elapsed            : %.1fs", elapsed)
         if failed:
             logger.warning("Re-run to retry %d failed node(s)", failed)
