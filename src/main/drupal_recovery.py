@@ -36,16 +36,10 @@ import requests
 import urllib3
 
 sys.path.insert(0, str(Path(__file__).parent))
-from drupal_importer import (
-    DEFAULT_SPREADSHEET,
-    build_payload,
-    load_and_merge,
-    load_config,
-    load_progress,
-    mark_complete,
-    post_node_with_retry,
-    save_progress,
-)
+from drupal_importer import (DEFAULT_SPREADSHEET, build_payload,
+                             load_and_merge, load_config, load_progress,
+                             mark_complete, post_node_with_retry,
+                             save_progress)
 from import_no_description import load_no_description_records
 
 logging.basicConfig(

@@ -39,14 +39,9 @@ import requests
 import urllib3
 
 sys.path.insert(0, str(Path(__file__).parent))
-from drupal_importer import (
-    DEFAULT_SPREADSHEET,
-    FIELD_ALLOWED_VALUES,
-    load_config,
-    normalize_date_value,
-    normalize_list_value,
-    DATE_FIELDS,
-)
+from drupal_importer import (DATE_FIELDS, DEFAULT_SPREADSHEET,
+                             FIELD_ALLOWED_VALUES, load_config,
+                             normalize_date_value, normalize_list_value)
 from drupal_patcher import fetch_all_nodes, patch_node
 from drupal_recovery import build_expected_records
 
@@ -221,8 +216,8 @@ def build_restoration_attributes(
       - Field values are equivalent → skip (no-op)
     """
     attributes: dict = {}
-    vendor = record.get("field_vendor_name", "")
-    product = record.get("field_product_name", "")
+    record.get("field_vendor_name", "")
+    record.get("field_product_name", "")
 
     for field in RESTORABLE_FIELDS:
         xlsx_val = record.get(field)

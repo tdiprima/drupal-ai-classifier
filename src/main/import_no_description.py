@@ -32,27 +32,10 @@ import openpyxl
 import requests
 import urllib3
 
-from drupal_importer import (
-    DEFAULT_SPREADSHEET,
-    DATE_FIELDS,
-    FIELD_ALLOWED_VALUES,
-    FIELD_INTEGER_FIELDS,
-    FIELD_MAP,
-    MAX_RETRIES,
-    RETRY_DELAY_SECONDS,
-    SITE_COLUMNS,
-    SKIP_SHEETS,
-    build_payload,
-    clean,
-    extract_invalid_fields,
-    load_config,
-    load_progress,
-    mark_complete,
-    normalize_date_value,
-    normalize_list_value,
-    post_node_with_retry,
-    save_progress,
-)
+from drupal_importer import (DEFAULT_SPREADSHEET, FIELD_MAP, SITE_COLUMNS,
+                             SKIP_SHEETS, build_payload, clean, load_config,
+                             load_progress, mark_complete,
+                             post_node_with_retry, save_progress)
 
 logging.basicConfig(
     level=logging.INFO,
