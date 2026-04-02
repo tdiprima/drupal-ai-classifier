@@ -128,7 +128,7 @@ def build_expected_records(spreadsheet: Path) -> dict[tuple, dict]:
     }
 
     # Merge: phase1 takes precedence; phase2 fills in keys not covered by phase1
-    combined = {**phase2, **phase1}
+    combined = phase2 | phase1
 
     logger.info(
         "Expected records — phase1: %d, phase2: %d, combined unique: %d",
