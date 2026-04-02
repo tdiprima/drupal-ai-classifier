@@ -49,7 +49,7 @@ from pathlib import Path
 
 import requests
 import urllib3
-from openai import AzureOpenAI
+from openai import OpenAI
 
 from ai_scanner_core import check_for_ai, configure_logging
 from drupal_importer import load_config as load_drupal_config
@@ -413,10 +413,9 @@ def main() -> None:
     })
     session.verify = False
 
-    ai_client = AzureOpenAI(
-        azure_endpoint=config["azure_endpoint"],
+    ai_client = OpenAI(
+        base_url=config["azure_endpoint"],
         api_key=config["azure_api_key"],
-        api_version="2024-02-15-preview",
     )
     deployment = config["azure_deployment"]
 
