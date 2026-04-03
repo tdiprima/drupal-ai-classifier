@@ -288,6 +288,9 @@ def _paginate_nodes(
     return nodes
 
 
+MIGRATION_SENTINEL = "1970-01-01T00:00:00+00:00"
+
+
 def filter_pending_nodes(
     fetched_nodes: list[dict],
     tracked_nodes: dict,
@@ -296,6 +299,10 @@ def filter_pending_nodes(
     From a list of fetched Drupal nodes, return only those that need scanning:
       - UUID not in tracked_nodes (new)
       - node's `changed` timestamp is newer than what we recorded (modified)
+
+    Nodes migrated from the old progress format have a sentinel timestamp.
+    These were already scanned, so backfill their recorded timestamp from
+    Drupal's current value instead of re-scanning.
     """
     pending = []
     for node in fetched_nodes:
@@ -304,6 +311,9 @@ def filter_pending_nodes(
             pending.append(node)
             continue
         recorded_changed = tracked_nodes[uuid].get("node_changed", "")
+        if recorded_changed == MIGRATION_SENTINEL:
+            tracked_nodes[uuid]["node_changed"] = node["changed"]
+            continue
         if node["changed"] and node["changed"] > recorded_changed:
             pending.append(node)
     return pending
