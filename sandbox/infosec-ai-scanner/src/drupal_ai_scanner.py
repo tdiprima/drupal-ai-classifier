@@ -427,12 +427,13 @@ def main() -> None:
     if force_full or since is None:
         logger.info("Fetching all nodes from Drupal...")
         fetched = fetch_all_nodes(session, config["base_url"], config["content_type"])
-        nodes = filter_pending_nodes(fetched, tracked_nodes)
     else:
         logger.info("Incremental scan — fetching nodes changed since %s", since)
-        nodes = fetch_nodes_changed_since(
+        fetched = fetch_nodes_changed_since(
             session, config["base_url"], config["content_type"], since,
         )
+
+    nodes = filter_pending_nodes(fetched, tracked_nodes)
 
     logger.info("Found %d node(s) needing AI scan", len(nodes))
 
