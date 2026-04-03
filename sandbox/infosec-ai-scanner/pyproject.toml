@@ -1,0 +1,14 @@
+[project]
+name = "infosec-ai-scanner"
+version = "0.1.0"
+description = "AI data pipeline"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    "dotenv>=0.9.9",
+    "icecream>=2.1.10",
+    "openai>=2.30.0",
+    "openpyxl>=3.1.5",
+    "requests>=2.32.5",
+    "urllib3>=2.6.3",
+]
