@@ -374,13 +374,13 @@ def patch_node(
     uuid: str,
     payload: dict,
     title: str,
-) -> bool:
-    """PATCH a single Drupal node. Returns True on success."""
+) -> str | None:
+    """PATCH a single Drupal node. Returns the updated `changed` timestamp on success, None on failure."""
     url = f"{base_url}/jsonapi/node/{content_type}/{uuid}"
     try:
         response = session.patch(url, json=payload, timeout=30)
         response.raise_for_status()
-        return True
+        return response.json().get("data", {}).get("attributes", {}).get("changed", "")
     except requests.exceptions.HTTPError as exc:
         logger.error(
             "HTTP %s patching '%s': %s",
@@ -388,7 +388,7 @@ def patch_node(
         )
     except requests.exceptions.RequestException as exc:
         logger.error("Request error patching '%s': %s", title, exc)
-    return False
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -497,11 +497,14 @@ def main() -> None:
 
             payload = build_patch_payload(config["content_type"], uuid, attributes)
 
-            if patch_node(session, config["base_url"], config["content_type"], uuid, payload, title):
+            updated_changed = patch_node(
+                session, config["base_url"], config["content_type"], uuid, payload, title,
+            )
+            if updated_changed is not None:
                 succeeded += 1
                 tracked_nodes[uuid] = {
                     "scanned_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "node_changed": node["changed"],
+                    "node_changed": updated_changed or node["changed"],
                 }
                 stats.update({"succeeded": succeeded, "failed": failed})
                 save_progress(progress_file, tracked_nodes, stats)
