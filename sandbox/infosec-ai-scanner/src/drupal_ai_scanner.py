@@ -40,6 +40,7 @@ Required .env variables:
     AZURE_OPENAI_DEPLOYMENT
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -288,7 +289,10 @@ def _paginate_nodes(
     return nodes
 
 
-MIGRATION_SENTINEL = "1970-01-01T00:00:00+00:00"
+def compute_content_hash(node: dict) -> str:
+    """Hash the fields sent to OpenAI so we only re-scan when content changes."""
+    content = f"{node.get('vendor', '')}|{node.get('product', '')}|{node.get('description', '')}"
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 def filter_pending_nodes(
@@ -298,23 +302,20 @@ def filter_pending_nodes(
     """
     From a list of fetched Drupal nodes, return only those that need scanning:
       - UUID not in tracked_nodes (new)
-      - node's `changed` timestamp is newer than what we recorded (modified)
+      - content hash differs from what we recorded (actually modified)
 
-    Nodes migrated from the old progress format have a sentinel timestamp.
-    These were already scanned, so backfill their recorded timestamp from
-    Drupal's current value instead of re-scanning.
+    Ignores Drupal's `changed` timestamp entirely — our own PATCHes bump it,
+    making it unreliable for change detection.
     """
     pending = []
     for node in fetched_nodes:
         uuid = node["uuid"]
+        current_hash = compute_content_hash(node)
         if uuid not in tracked_nodes:
             pending.append(node)
             continue
-        recorded_changed = tracked_nodes[uuid].get("node_changed", "")
-        if recorded_changed == MIGRATION_SENTINEL:
-            tracked_nodes[uuid]["node_changed"] = node["changed"]
-            continue
-        if node["changed"] and node["changed"] > recorded_changed:
+        recorded_hash = tracked_nodes[uuid].get("content_hash", "")
+        if current_hash != recorded_hash:
             pending.append(node)
     return pending
 
@@ -505,6 +506,7 @@ def main() -> None:
                 tracked_nodes[uuid] = {
                     "scanned_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                     "node_changed": updated_changed or node["changed"],
+                    "content_hash": compute_content_hash(node),
                 }
                 stats.update({"succeeded": succeeded, "failed": failed})
                 save_progress(progress_file, tracked_nodes, stats)
