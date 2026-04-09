@@ -6,6 +6,9 @@
 # Run weekly via crontab, keeps the last 7 backups
 # ============================================================
 
+# To restore later:
+# gunzip < /var/backups/mysql/whatever.sql.gz | mysql -u user -p database
+
 # --- Configuration (edit these) ---
 DEFAULTS_FILE="/root/.my-backup.cnf"
 DB_NAME="appsecurity"
