@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# /usr/local/sbin/
 
 EMAIL="tdiprima"
 LOG_FILE="/var/log/ai_scanner_cron.log"

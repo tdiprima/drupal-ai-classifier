@@ -1,5 +1,0 @@
-Traceback (most recent call last):
-  File "/opt/infosec-ai-scanner/src/drupal_ai_scanner.py", line 52, in <module>
-    from openai import OpenAI
-ModuleNotFoundError: No module named 'openai'
-/usr/local/sbin/run_scanner.sh: line 13: : No such file or directory
