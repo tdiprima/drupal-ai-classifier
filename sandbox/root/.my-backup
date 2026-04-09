@@ -1,0 +1,5 @@
+[mysqldump]
+user=capella
+password=PASS
+host=localhost
+port=3306
