@@ -13,9 +13,12 @@ Merge rules:
   - all other fields     : keep primary's value; fill empty slots from secondaries
 
 Usage:
-    python drupal_merge_duplicates.py --dry-run    # preview without changing anything
-    python drupal_merge_duplicates.py              # live merge + delete
-    python drupal_merge_duplicates.py --debug      # verbose output
+    python drupal_merge_duplicates.py --dry-run                  # preview without changing anything
+    python drupal_merge_duplicates.py                            # live merge + delete
+    python drupal_merge_duplicates.py --debug                    # verbose output
+    python drupal_merge_duplicates.py --diff 576 607             # show why two nodes don't auto-match
+    python drupal_merge_duplicates.py --force-merge 576 607      # merge 607 into 576, delete 607
+    python drupal_merge_duplicates.py --dry-run --force-merge 576 607  # preview forced merge
     python drupal_merge_duplicates.py --help
 
 Required .env variables:
@@ -78,9 +81,35 @@ def parse_args() -> dict:
         print(__doc__)
         sys.exit(0)
 
+    force_merge = None
+    if "--force-merge" in args:
+        idx = args.index("--force-merge")
+        if idx + 2 >= len(args):
+            print("ERROR: --force-merge requires two nid arguments: --force-merge <keep_nid> <discard_nid>")
+            sys.exit(1)
+        try:
+            force_merge = (int(args[idx + 1]), int(args[idx + 2]))
+        except ValueError:
+            print("ERROR: --force-merge nids must be integers")
+            sys.exit(1)
+
+    diff_pair = None
+    if "--diff" in args:
+        idx = args.index("--diff")
+        if idx + 2 >= len(args):
+            print("ERROR: --diff requires two nid arguments: --diff <nid1> <nid2>")
+            sys.exit(1)
+        try:
+            diff_pair = (int(args[idx + 1]), int(args[idx + 2]))
+        except ValueError:
+            print("ERROR: --diff nids must be integers")
+            sys.exit(1)
+
     return {
         "dry_run": "--dry-run" in args,
         "debug": "--debug" in args,
+        "force_merge": force_merge,
+        "diff_pair": diff_pair,
     }
 
 
@@ -135,8 +164,51 @@ def fetch_all_nodes(
 
         url = body.get("links", {}).get("next", {}).get("href")
 
-    logger.info("Fetched %d node(s) total", len(nodes))
-    return nodes
+    # Drupal JSON:API offset pagination can return the same node on two pages
+    # if a record is updated between requests. Deduplicate by UUID.
+    seen: set[str] = set()
+    unique_nodes = []
+    for node in nodes:
+        if node["uuid"] not in seen:
+            seen.add(node["uuid"])
+            unique_nodes.append(node)
+
+    if len(unique_nodes) < len(nodes):
+        logger.warning(
+            "Dropped %d duplicate node(s) from pagination (same UUID fetched twice)",
+            len(nodes) - len(unique_nodes),
+        )
+
+    logger.info("Fetched %d node(s) total", len(unique_nodes))
+    return unique_nodes
+
+
+def fetch_node_by_nid(
+    session: requests.Session,
+    base_url: str,
+    content_type: str,
+    nid: int,
+) -> dict | None:
+    """
+    Fetch a single node by its integer node ID.
+    Returns the parsed node dict, or None if not found.
+    """
+    url = f"{base_url}/jsonapi/node/{content_type}"
+    params = {
+        f"fields[node--{content_type}]": _all_fields_param(content_type),
+        "filter[drupal_internal__nid]": nid,
+    }
+    try:
+        response = session.get(url, params=params, timeout=30)
+        response.raise_for_status()
+        items = response.json().get("data", [])
+        if not items:
+            logger.error("Node nid=%d not found", nid)
+            return None
+        return _parse_node(items[0])
+    except requests.exceptions.RequestException as exc:
+        logger.error("Error fetching nid=%d: %s", nid, exc)
+        return None
 
 
 def _parse_node(item: dict) -> dict | None:
@@ -188,6 +260,34 @@ def _extract_scalar(value) -> str:
     if isinstance(value, dict):
         return str(value.get("value") or "").strip()
     return str(value).strip()
+
+
+# ---------------------------------------------------------------------------
+# Diff helper
+# ---------------------------------------------------------------------------
+
+def show_diff(keep: dict, discard: dict) -> None:
+    """Log a side-by-side comparison of the four match fields for two nodes."""
+    match_fields = [
+        ("title",       "title"),
+        ("vendor",      "field_vendor_name"),
+        ("product",     "field_product_name"),
+        ("description", "field_description"),
+    ]
+    logger.info("Field diff between nid=%d (keep) and nid=%d (discard):", keep["nid"], discard["nid"])
+    any_diff = False
+    for label, key in match_fields:
+        keep_val = keep.get(key) or keep.get(label, "")
+        discard_val = discard.get(key) or discard.get(label, "")
+        if keep_val.lower().strip() != discard_val.lower().strip():
+            logger.info("  %-15s KEEP    : %r", label, keep_val)
+            logger.info("  %-15s DISCARD : %r", label, discard_val)
+            any_diff = True
+        else:
+            logger.info("  %-15s (same)  : %r", label, keep_val)
+    if not any_diff:
+        logger.info("  All four match fields are identical — auto-detection should have caught this.")
+        logger.info("  Check for hidden whitespace or Unicode differences above.")
 
 
 # ---------------------------------------------------------------------------
@@ -372,6 +472,62 @@ def main() -> None:
     })
     session.verify = False
 
+    # ------------------------------------------------------------------
+    # --diff mode: show why two specific nodes don't auto-match
+    # ------------------------------------------------------------------
+    if args["diff_pair"]:
+        keep_nid, discard_nid = args["diff_pair"]
+        keep = fetch_node_by_nid(session, config["base_url"], config["content_type"], keep_nid)
+        discard = fetch_node_by_nid(session, config["base_url"], config["content_type"], discard_nid)
+        if not keep or not discard:
+            sys.exit(1)
+        show_diff(keep, discard)
+        return
+
+    # ------------------------------------------------------------------
+    # --force-merge mode: merge two specific nodes by nid, skip detection
+    # ------------------------------------------------------------------
+    if args["force_merge"]:
+        keep_nid, discard_nid = args["force_merge"]
+        logger.info("Force-merge: keeping nid=%d, discarding nid=%d", keep_nid, discard_nid)
+
+        keep = fetch_node_by_nid(session, config["base_url"], config["content_type"], keep_nid)
+        discard = fetch_node_by_nid(session, config["base_url"], config["content_type"], discard_nid)
+        if not keep or not discard:
+            sys.exit(1)
+
+        show_diff(keep, discard)
+        changes = merge_into_primary(keep, [discard])
+
+        if args["dry_run"]:
+            logger.info("DRY RUN — no changes will be made")
+            if changes:
+                logger.info("Would PATCH nid=%d with: %s", keep_nid, json.dumps(changes, default=str))
+            else:
+                logger.info("No field changes needed for nid=%d", keep_nid)
+            logger.info("Would DELETE nid=%d (uuid=%s)", discard_nid, discard["uuid"])
+            return
+
+        if changes:
+            ok = patch_node(
+                session, config["base_url"], config["content_type"],
+                keep["uuid"], changes, keep["title"],
+            )
+            if not ok:
+                logger.error("PATCH failed — aborting to avoid data loss")
+                sys.exit(1)
+        else:
+            logger.info("No field changes needed for nid=%d", keep_nid)
+
+        delete_node(
+            session, config["base_url"], config["content_type"],
+            discard["uuid"], discard_nid, discard["title"],
+        )
+        return
+
+    # ------------------------------------------------------------------
+    # Default mode: auto-detect duplicates across all nodes
+    # ------------------------------------------------------------------
     nodes = fetch_all_nodes(session, config["base_url"], config["content_type"])
     duplicate_groups = find_duplicate_groups(nodes)
 
