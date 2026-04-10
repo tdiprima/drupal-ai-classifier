@@ -321,6 +321,41 @@ def filter_pending_nodes(
 
 
 # ---------------------------------------------------------------------------
+# Unicode normalization
+# ---------------------------------------------------------------------------
+
+_UNICODE_REPLACEMENTS = {
+    "\u2018": "'",    # left single quote
+    "\u2019": "'",    # right single quote / apostrophe
+    "\u201A": "'",    # single low-9
+    "\u201B": "'",    # single high-reversed-9
+    "\u201C": '"',    # left double quote
+    "\u201D": '"',    # right double quote
+    "\u201E": '"',    # double low-9
+    "\u201F": '"',    # double high-reversed-9
+    "\u2013": "-",    # en dash
+    "\u2014": "--",   # em dash
+    "\u2026": "...",  # ellipsis
+    "\u00A0": " ",    # non-breaking space
+    "\u2002": " ",    # en space
+    "\u2003": " ",    # em space
+    "\u2010": "-",    # hyphen
+    "\u2011": "-",    # non-breaking hyphen
+    "\u2012": "-",    # figure dash
+    "\u2015": "--",   # horizontal bar
+    "\u00B7": "*",    # middle dot
+    "\u2022": "*",    # bullet
+}
+
+
+def normalize_text(text: str) -> str:
+    """Replace typographic Unicode characters with plain ASCII equivalents."""
+    for char, replacement in _UNICODE_REPLACEMENTS.items():
+        text = text.replace(char, replacement)
+    return text
+
+
+# ---------------------------------------------------------------------------
 # AI result -> Drupal attribute mapping
 # ---------------------------------------------------------------------------
 
@@ -331,7 +366,7 @@ def map_ai_result_to_attributes(ai_result: dict) -> dict | None:
     """
     has_ai = ai_result.get("has_ai", "ERROR")
     confidence = ai_result.get("confidence", "LOW").lower()
-    reason = ai_result.get("reason", "")
+    reason = normalize_text(ai_result.get("reason", ""))
 
     if has_ai == "ERROR":
         return None
