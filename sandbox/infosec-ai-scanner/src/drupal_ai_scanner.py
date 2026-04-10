@@ -333,8 +333,8 @@ _UNICODE_REPLACEMENTS = {
     "\u201D": '"',    # right double quote
     "\u201E": '"',    # double low-9
     "\u201F": '"',    # double high-reversed-9
-    "\u2013": "-",    # en dash
-    "\u2014": "--",   # em dash
+    "\u2013": " - ",  # en dash
+    "\u2014": " - ",  # em dash
     "\u2026": "...",  # ellipsis
     "\u00A0": " ",    # non-breaking space
     "\u2002": " ",    # en space

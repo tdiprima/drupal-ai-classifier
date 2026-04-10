@@ -156,22 +156,28 @@ def main():
     client = DrupalClient(config["base_url"], config["username"], config["password"])
     allowlist = set(args.fields) if args.fields else None
 
-    scanned = 0
-    to_fix = 0
+    # Collect ALL nodes before patching anything.
+    # Patching changes Drupal's `changed` timestamp, which shifts sort order
+    # mid-pagination and causes nodes to be skipped if we patch while iterating.
+    logger.info("Fetching all nodes...")
+    all_nodes = list(client.list_nodes(config["content_type"]))
+    logger.info("Fetched %d node(s)", len(all_nodes))
+
+    pending = []
+    for node in all_nodes:
+        changed = build_patched_attributes(node.get("attributes", {}), allowlist)
+        if changed:
+            pending.append((node, changed))
+
+    scanned = len(all_nodes)
+    to_fix = len(pending)
     fixed = 0
     errors = 0
 
-    for node in client.list_nodes(config["content_type"]):
-        scanned += 1
+    for node, changed in pending:
         uuid = node["id"]
         nid = node.get("attributes", {}).get("drupal_internal__nid", "?")
         title = node.get("attributes", {}).get("title", "")
-
-        changed = build_patched_attributes(node.get("attributes", {}), allowlist)
-        if not changed:
-            continue
-
-        to_fix += 1
         logger.info("[nid=%s] %r", nid, title)
         for fname in changed:
             logger.info("    - %s", fname)
